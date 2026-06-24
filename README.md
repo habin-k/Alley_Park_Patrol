@@ -7,12 +7,13 @@
 
 ---
 
-## 프로젝트 개요
+### 프로젝트 개요
 * **팀명:** 차 빼! (Cha-Bbae!)
 * **개발 환경:** ROS2 Humble, Ubuntu 22.04, Python 3.10, C++
 * **주요 기술:** ROS2 Nav2, YOLO (v8/v10), OCR, Fleet Management, Spatial Homography
 
-### System Topology
+
+## System Topology
 
 ### Webcam Infra
 * **Hardware:** 고정형 웹캠 (Logitech C920급) / IP CCTV 카메라
