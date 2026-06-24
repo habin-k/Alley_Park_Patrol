@@ -1,0 +1,55 @@
+# Python & AI Models
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.toast
+.SPIES
+images_export/
+
+# Data and Weights (YOLO)
+*.pt
+*.onnx
+*.weights
+data/
+datasets/
+runs/
+
+# ==========================================
+# ROS2 / Colcon Build Output
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+.catkin_workspace
+.ami_code_helper.json
+
+# ==========================================
+# C / C++ compiled files
+*.spec
+*.o
+*.obj
+*.so
+*.a
+*.lib
+*.exe
+*.dll
+*.dylib
+
+# ==========================================
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Git LFS Track Lock
+.gitattributes
