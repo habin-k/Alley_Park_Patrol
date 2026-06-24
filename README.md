@@ -24,7 +24,7 @@
 
 ---
 
-### 시스템 아키텍처 & 시나리오
+### System Architecture & Scenario
 
 본 시스템은 **3가지 구체적 관제 시나리오**를 기반으로 구동됩니다.
 1. **시나리오 A (일반 도로):** 골목길 황색 이중 실선 구역 시차 단속 
@@ -50,7 +50,7 @@
 
 ---
 
-### 저장소 구조 (Repository Structure)
+### Repository Structure
 *상세 구현 및 구동 방법은 각 하위 폴더의 README를 참조.*
 
 ```text
