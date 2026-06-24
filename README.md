@@ -1,2 +1,22 @@
-# Alley_Park_Patrol
-AI 기반 골목길 불법 주정차 무인 순찰 및 단속 시스템: '차 빼!' || AI-Powered Automated Illegal Parking Patrol &amp; Enforcement System (Multi-AMR Fleet Management using Webcam Vision, Central Server, and ROS2 Nav2)
+# Alley_Park_Patrol (차 빼!) 🚗🚨
+
+> **AI 기반 골목길 및 소방 구역 불법 주정차 무인 순찰 및 단속 시스템**  
+> AI-Powered Automated Illegal Parking Patrol & Enforcement System
+
+본 프로젝트는 고정식 웹캠 인프라, 중앙 관제 서버, 그리고 다중 자율주행 로봇(AMR)의 유기적인 협업을 통해 좁은 주택가 골목길과 소방차 전용 구역의 불법 주정차 문제를 해결하는 스마트시티 무인 관제 솔루션입니다.
+
+---
+
+## 프로젝트 개요
+* **팀명:** 차 빼! (Cha-Bbae!)
+* **개발 환경:** ROS2 Humble, Ubuntu 22.04, Python 3.10, C++
+* **주요 기술:** ROS2 Nav2, YOLO (v8/v10), OCR, Fleet Management, Spatial Homography
+
+---
+
+## 시스템 아키텍처 & 시나리오
+
+본 시스템은 **3가지 구체적 관제 시나리오**를 기반으로 구동됩니다.
+1. **시나리오 A (일반 도로):** 골목길 황색 이중 실선 구역 시차 단속 (5분 유예 검증 및 후방 채증)
+2. **시나리오 B (안전 구역):** 소방차 지정 구역 즉시 대피 및 사이렌/방송을 통한 무관용 강제 통제
+3. **시나리오 C (특수 구역):** 전용 주차자리(장애인, 전기차 등) 주차선 색상 및 클래스 매칭 단속
