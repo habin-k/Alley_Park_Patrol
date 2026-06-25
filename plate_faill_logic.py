@@ -34,16 +34,19 @@ class PlateFailTestNode(Node):
         self.class_names = model.names
         self.bridge = CvBridge()
         self.plate_class_id = 2
+        self.window_name = 'plate_fail_yolo_view' # 카메라 화면 확인 
 
         self.declare_parameter('cmd_vel_topic', '/robot2/cmd_vel')
         self.declare_parameter('odom_topic', '/robot2/odom')
-        self.declare_parameter('plate_confidence_threshold', 0.5)
+        self.declare_parameter('plate_confidence_threshold', 0.8) # 번호판 confidence 기준
+        self.declare_parameter('show_yolo_window', True) # 카메라 화면을 띄우게 할지 안 할지 결정 가능 
 
         cmd_vel_topic = self.get_parameter('cmd_vel_topic').value
         odom_topic = self.get_parameter('odom_topic').value
         self.plate_confidence_threshold = (
             self.get_parameter('plate_confidence_threshold').value
         )
+        self.show_yolo_window = self.get_parameter('show_yolo_window').value # 카메라 화면을 띄우게 할지 안 할지 결정 가능 
 
         self.cmd_pub = self.create_publisher(Twist, cmd_vel_topic, 10)
         self.target_image_pub = self.create_publisher(Image, '/target_plate_image', 10)
@@ -86,6 +89,16 @@ class PlateFailTestNode(Node):
 
         if best_detection is None:
             self.plate_detected = False
+            cv2.putText(
+                img,
+                'Plate: not detected',
+                (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 0, 255),
+                2
+            )
+            self._show_yolo_window(img)
             return
 
         x1, y1, x2, y2, confidence, label = best_detection
@@ -109,6 +122,7 @@ class PlateFailTestNode(Node):
             (0, 0, 255),
             2
         )
+        self._show_yolo_window(img)
 
         image_msg = self.bridge.cv2_to_imgmsg(img, encoding='bgr8')
         image_msg.header = msg.header
@@ -145,6 +159,17 @@ class PlateFailTestNode(Node):
         if 0 <= cls < len(self.class_names):
             return self.class_names[cls]
         return f'class_{cls}'
+
+    def _show_yolo_window(self, img):
+        if not self.show_yolo_window:
+            return
+
+        try:
+            cv2.imshow(self.window_name, img)
+            cv2.waitKey(1)
+        except Exception as exc:
+            self.get_logger().warn(f"YOLO 확인 창 표시 실패: {exc}")
+            self.show_yolo_window = False
 
     def send_target_info_to_amr2(self):
         if self.target_info_published:
@@ -376,6 +401,11 @@ class PlateFailTestNode(Node):
 
     def _stop_robot(self):
         self.cmd_pub.publish(Twist())
+
+    def destroy_node(self):
+        if self.show_yolo_window:
+            cv2.destroyAllWindows()
+        super().destroy_node()
 
 
 def load_yolo_model(model_path):
