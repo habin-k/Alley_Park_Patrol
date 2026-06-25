@@ -8,6 +8,7 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist, PoseStamped
+from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Image
 import time
 import math
@@ -23,14 +24,34 @@ class AMRControlNode(Node):
         self.plate_image_data = None # 찾았을 때의 이미지 데이터를 저장할 변수
         self.plate_coords_data = None # 찾았을 때의 바운딩 박스 정보 등을 저장할 변수
 
+        self.current_odom = None
+        self.current_yaw = None
+
+        self.declare_parameter('cmd_vel_topic', '/robot2/cmd_vel')
+        self.declare_parameter('odom_topic', '/robot2/odom')
+
+        cmd_vel_topic = self.get_parameter('cmd_vel_topic').value
+        odom_topic = self.get_parameter('odom_topic').value
+
         # [발행] 로봇의 바퀴를 제어하는 토픽 (robot2 에서 테스트 할 예정)
-        self.cmd_pub = self.create_publisher(Twist, '/robot2/cmd_vel', 10)
+        self.cmd_pub = self.create_publisher(Twist, cmd_vel_topic, 10)
+
+        # [구독] odom 기반으로 실제 회전 각도와 이동 거리를 확인
+        self.odom_sub = self.create_subscription(
+            Odometry,
+            odom_topic,
+            self._odom_callback,
+            10
+        )
         
         # [발행] AMR2(또는 관제 서버)로 보낼 타겟 정보 토픽
         self.target_image_pub = self.create_publisher(Image, '/target_plate_image', 10)
         self.target_pose_pub = self.create_publisher(PoseStamped, '/current_pose', 10)
         
-        self.get_logger().info(" 통합 AMR 제어 노드(YOLO 포함) 시작됨")
+        self.get_logger().info(
+            f" 통합 AMR 제어 노드(YOLO 포함) 시작됨 "
+            f"(cmd_vel: {cmd_vel_topic}, odom: {odom_topic})"
+        )
 
         # (예시) 실제 환경에서는 이 노드 안 어딘가에 카메라 이미지를 받아서
         # YOLO 모델에 넣고 돌리는 콜백(또는 루프)이 존재할 것입니다.
@@ -88,15 +109,47 @@ class AMRControlNode(Node):
     # ---------------------------------------------------------
     # 보조 제어 함수들 (내부 변수 self.plate_detected 참조)
     # ---------------------------------------------------------
+    def _odom_callback(self, msg):
+        self.current_odom = msg
+        self.current_yaw = self._quaternion_to_yaw(msg.pose.pose.orientation)
+
+    def _quaternion_to_yaw(self, q):
+        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        return math.atan2(siny_cosp, cosy_cosp)
+
+    def _normalize_angle(self, angle):
+        while angle > math.pi:
+            angle -= 2.0 * math.pi
+        while angle < -math.pi:
+            angle += 2.0 * math.pi
+        return angle
+
+    def _spin_once_and_check(self, timeout_sec=0.1):
+        rclpy.spin_once(self, timeout_sec=timeout_sec)
+        if self.plate_detected:
+            self._stop_robot()
+            self.get_logger().info(" 번호판 인식 성공! 로봇 정지.")
+            return True
+        return False
+
+    def _wait_for_odom(self, timeout_sec=3.0):
+        end_time = time.monotonic() + timeout_sec
+        while rclpy.ok() and self.current_odom is None and time.monotonic() < end_time:
+            if self._spin_once_and_check(0.1):
+                return True
+
+        if self.current_odom is None:
+            self.get_logger().error(" odom 데이터를 받지 못했습니다. 로봇 보정 이동을 건너뜁니다.")
+            return False
+        return True
+
     def _wait_and_check(self, duration_sec):
         steps = int(duration_sec * 10)
         for _ in range(steps):
             # 토픽 구독 없이, 같은 클래스 내의 변수를 바로 확인
-            if self.plate_detected:
-                self._stop_robot()
-                self.get_logger().info(" 번호판 인식 성공! 로봇 정지.")
+            if self._spin_once_and_check(0.1):
                 return True
-            time.sleep(0.1)
         return False
 
     def _scan_left_right(self):
@@ -106,38 +159,99 @@ class AMRControlNode(Node):
         return False
 
     def _rotate_in_place(self, degrees):
-        radians = math.radians(degrees)
+        if degrees == 0:
+            return self._spin_once_and_check(0.1)
+
+        if self.plate_detected:
+            self._stop_robot()
+            return True
+
+        if not self._wait_for_odom():
+            return False
+
+        if self.plate_detected:
+            self._stop_robot()
+            return True
+
+        target_radians = math.radians(abs(degrees))
+        direction = 1.0 if degrees > 0 else -1.0
         angular_speed = 0.3
-        duration = abs(radians / angular_speed)
+        angle_tolerance = math.radians(2.0)
+        timeout_sec = target_radians / angular_speed + 3.0
         
         twist = Twist()
-        twist.angular.z = angular_speed if degrees > 0 else -angular_speed
-        
-        steps = int(duration * 10)
-        for _ in range(steps):
-            if self.plate_detected:
-                self._stop_robot()
-                return True
+        twist.angular.z = direction * angular_speed
+
+        prev_yaw = self.current_yaw
+        rotated = 0.0
+        start_time = time.monotonic()
+
+        while rclpy.ok() and abs(rotated) < target_radians - angle_tolerance:
+            if time.monotonic() - start_time > timeout_sec:
+                self.get_logger().warn(f" {degrees}도 회전 제한 시간 초과")
+                break
+
             self.cmd_pub.publish(twist)
-            time.sleep(0.1)
+            if self._spin_once_and_check(0.1):
+                return True
+
+            if self.current_yaw is None:
+                continue
+
+            delta_yaw = self._normalize_angle(self.current_yaw - prev_yaw)
+            rotated += delta_yaw
+            prev_yaw = self.current_yaw
+
+            if rotated * direction < -angle_tolerance:
+                self.get_logger().warn(" odom 회전 방향이 명령 방향과 다릅니다. 회전을 중단합니다.")
+                break
             
         self._stop_robot()
         return False
 
     def _move_straight(self, distance_m):
+        if distance_m == 0:
+            return self._spin_once_and_check(0.1)
+
+        if self.plate_detected:
+            self._stop_robot()
+            return True
+
+        if not self._wait_for_odom():
+            return False
+
+        if self.plate_detected:
+            self._stop_robot()
+            return True
+
         linear_speed = 0.1
-        duration = distance_m / linear_speed
+        direction = 1.0 if distance_m > 0 else -1.0
+        target_distance = abs(distance_m)
+        distance_tolerance = 0.02
+        timeout_sec = target_distance / linear_speed + 3.0
         
         twist = Twist()
-        twist.linear.x = linear_speed
-        
-        steps = int(duration * 10)
-        for _ in range(steps):
-            if self.plate_detected:
-                self._stop_robot()
-                return True
+        twist.linear.x = direction * linear_speed
+
+        start_position = self.current_odom.pose.pose.position
+        start_x = start_position.x
+        start_y = start_position.y
+        start_time = time.monotonic()
+
+        while rclpy.ok():
+            position = self.current_odom.pose.pose.position
+            moved_distance = math.hypot(position.x - start_x, position.y - start_y)
+
+            if moved_distance >= target_distance - distance_tolerance:
+                break
+
+            if time.monotonic() - start_time > timeout_sec:
+                self.get_logger().warn(f" {distance_m:.2f}m 직진 제한 시간 초과")
+                break
+
             self.cmd_pub.publish(twist)
-            time.sleep(0.1)
+            if self._spin_once_and_check(0.1):
+                return True
             
         self._stop_robot()
         return False
