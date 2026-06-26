@@ -7,13 +7,10 @@
   이 브리지 노드가 두 시스템 사이의 변환기 역할을 한다.
 
 구독 토픽 → 전송 API:
-  webcam_objects/map_detections      (sensor_msgs/Image)
+  webcam_images/webcam1/detections   (sensor_msgs/Image)
     → POST /api/webcam1/frame/        (바운딩박스 포함 이미지, base64)
 
-  webcam_images/webcam2/detections   (sensor_msgs/Image)
-    → POST /api/webcam2/frame/        (웹캠2 이미지, base64)
-
-  webcam_objects/markers             (visualization_msgs/MarkerArray)
+  webcam_objects/map_detections      (std_msgs/String, JSON)
     → POST /api/parking/              (차량 맵 좌표 x, y)
 
 실행 방법:
@@ -27,13 +24,14 @@
 """
 
 import base64
+import json
 import threading
 
 import cv2
 import requests
 import rclpy
 from cv_bridge import CvBridge
-from visualization_msgs.msg import MarkerArray
+from std_msgs.msg import String
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 
@@ -86,7 +84,7 @@ class WebcamBridge(Node):
     """
     [클래스] 웹캠 브리지 ROS2 노드.
 
-    ROS2 토픽 3개를 구독하여 중앙 서버 HTTP API로 데이터를 전달한다.
+    ROS2 토픽 2개를 구독하여 중앙 서버 HTTP API로 데이터를 전달한다.
 
     Attributes:
         bridge        : CvBridge — ROS2 Image 메시지를 OpenCV 이미지로 변환하는 도구
@@ -100,7 +98,7 @@ class WebcamBridge(Node):
 
         - CvBridge 생성
         - 중복 좌표 방지용 set 초기화
-        - ROS2 토픽 3개 구독 등록
+        - ROS2 토픽 2개 구독 등록
         """
         super().__init__('webcam_bridge')
         self.bridge = CvBridge()
@@ -116,9 +114,10 @@ class WebcamBridge(Node):
             self._webcam1_cb,
             10,
         )
-        # 마커 배열: 탐지된 차량의 맵 좌표 (x, y) → DB 저장용
+        # 차량 맵 좌표: JSON 문자열 형태로 발행됨 (std_msgs/String)
+        # 예: '{"objects": [{"x": 0.5, "y": -1.2}, ...]}'
         self.create_subscription(
-            MarkerArray,
+            String,
             'webcam_objects/map_detections',
             self._map_detections_cb,
             10,
@@ -148,40 +147,42 @@ class WebcamBridge(Node):
 
     def _map_detections_cb(self, msg):
         """
-        [콜백] 차량 탐지 마커 배열 수신 시 호출된다.
+        [콜백] 차량 맵 좌표 JSON 수신 시 호출된다.
 
-        MarkerArray에서 각 차량의 맵 좌표(x, y)를 추출하여
+        std_msgs/String 메시지의 data 필드에 담긴 JSON 문자열을 파싱하여
+        각 차량 객체의 맵 좌표(x, y)를 추출하고
         서버의 /api/parking/ 엔드포인트로 POST 요청을 전송한다.
-        서버는 이 좌표를 parking_events 테이블에 저장하고
-        AMR1이 이동할 목표 좌표로 사용한다.
+
+        기대하는 JSON 형식:
+          {"objects": [{"x": 0.5, "y": -1.2}, ...]}
 
         중복 전송 방지 로직:
           1. x == 0.0 또는 y == 0.0 이면 무효 좌표로 스킵
-             (탐지 실패 또는 측정 오류로 인해 0이 들어오는 경우)
           2. 이미 전송한 좌표(소수점 1자리 기준)는 재전송 안 함
-             (웹캠이 매 프레임마다 같은 차량을 반복 탐지하므로
-              차량 1대당 DB row 1개만 생성되도록 보장)
 
         Args:
-            msg : visualization_msgs/MarkerArray — 탐지된 차량의 맵 좌표 마커 배열
+            msg : std_msgs/String — JSON 문자열이 담긴 메시지
         """
-        for marker in msg.markers:
-            x = marker.pose.position.x
-            y = marker.pose.position.y
+        try:
+            data = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f'JSON 파싱 실패: {msg.data[:80]}')
+            return
 
-            # 무효 좌표 필터링: x 또는 y 중 하나라도 0이면 스킵
-            # (둘 다 0인 경우뿐만 아니라 한 축만 0인 경우도 측정 실패로 판단)
+        for obj in data.get('objects', []):
+            x = obj.get('x', 0.0)
+            y = obj.get('y', 0.0)
+
+            # 무효 좌표 필터링
             if x == 0.0 or y == 0.0:
                 self.get_logger().warn(f'무효 좌표 스킵: ({x:.2f}, {y:.2f})')
                 continue
 
             # 소수점 1자리로 반올림하여 중복 여부 확인
-            # 예: x=0.56, y=0.23 → key=(0.6, 0.2) 로 비교
             key = (round(x, 1), round(y, 1))
             if key in self._sent_coords:
-                continue  # 이미 전송한 좌표, 스킵
+                continue
 
-            # 새 좌표 등록 후 서버로 전송
             self._sent_coords.add(key)
             payload = {'observation_x': x, 'observation_y': y}
             threading.Thread(

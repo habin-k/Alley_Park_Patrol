@@ -2,10 +2,11 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
 from drf_spectacular.utils import extend_schema
+from django.db import connection
 from .models import ParkingEvent, VehicleInfo, DisabledVehicle
 from .serializers import (
     ParkingEventCreateSerializer, ParkingEventSerializer,
-    ParkingEventNextSerializer, ZoneUpdateSerializer,
+    ParkingEventNextSerializer,
     VehicleInfoCreateSerializer, VehicleInfoNextSerializer,
     DisabledVehicleSerializer,
 )
@@ -60,28 +61,7 @@ def parking_delete(request, event_id):
     return Response({'status': 'deleted', 'event_id': event_id})
 
 
-# ── Police 1 노드 ─────────────────────────────────────────────
-
-@extend_schema(
-    summary="[AMR1] 구역/차량 유형 업데이트",
-    description="AMR1이 현장에서 주차선 색깔 및 맵 좌표 비교로 판별한 zone_type과 vehicle_type을 업데이트.",
-    request=ZoneUpdateSerializer,
-    responses={200: ParkingEventSerializer},
-)
-@api_view(['PATCH'])
-def parking_zone_update(request, event_id):
-    serializer = ZoneUpdateSerializer(data=request.data)
-    if not serializer.is_valid():
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    try:
-        event = ParkingEvent.objects.get(id=event_id)
-    except ParkingEvent.DoesNotExist:
-        return Response({'error': 'event not found'}, status=status.HTTP_404_NOT_FOUND)
-    event.vehicle_type = serializer.validated_data['vehicle_type']
-    event.zone_type    = serializer.validated_data['zone_type']
-    event.save()
-    return Response({'event_id': event.id, 'vehicle_type': event.vehicle_type, 'zone_type': event.zone_type})
-
+# ── AMR1 노드 ─────────────────────────────────────────────────
 
 @extend_schema(
     summary="[AMR1] 목표 좌표 수신",
@@ -104,8 +84,8 @@ def parking_next(request):
 
 
 @extend_schema(
-    summary="[Police 1] 번호판 정보 저장",
-    description="Police 1이 OCR로 번호판 인식 후 호출. vehicle_info 저장 + 해당 이벤트 status → SCANNED.",
+    summary="[AMR1] 번호판 정보 저장",
+    description="AMR1이 OCR로 번호판 인식 후 호출. vehicle_info 저장 + 해당 이벤트 status → SCANNED.",
     request=VehicleInfoCreateSerializer,
     responses={201: VehicleInfoNextSerializer},
 )
@@ -121,28 +101,10 @@ def vehicle_create(request):
     except ParkingEvent.DoesNotExist:
         return Response({'error': 'event not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    ocr_image_path = data.get('ocr_image_path')
-    ocr_image = request.FILES.get('ocr_image')
-    if ocr_image:
-        import os
-        from django.conf import settings as django_settings
-        from django.utils import timezone as tz
-        save_dir = os.path.join(django_settings.MEDIA_ROOT, 'ocr_images')
-        os.makedirs(save_dir, exist_ok=True)
-        timestamp = tz.now().strftime('%Y%m%d_%H%M%S')
-        filename = f'{data["event_id"]}_{timestamp}.jpg'
-        file_path = os.path.join(save_dir, filename)
-        with open(file_path, 'wb') as f:
-            for chunk in ocr_image.chunks():
-                f.write(chunk)
-        ocr_image_path = f'{django_settings.MEDIA_URL}ocr_images/{filename}'
-
     vehicle_info = VehicleInfo.objects.create(
         event=event,
         plate_number=data['plate_number'],
-        amr_vehicle_x=data.get('amr_vehicle_x'),
-        amr_vehicle_y=data.get('amr_vehicle_y'),
-        ocr_image_path=ocr_image_path,
+        ocr_image=data.get('ocr_image'),
     )
     event.status = 'SCANNED'
     event.save()
@@ -151,7 +113,7 @@ def vehicle_create(request):
 
 
 @extend_schema(
-    summary="[Police 1] 장애인 차량 여부 확인",
+    summary="[AMR1] 장애인 차량 여부 확인",
     description="번호판으로 disabled_vehicle 테이블 조회. 등록된 장애인 차량이면 is_disabled=true.",
     responses={200: DisabledVehicleSerializer},
 )
@@ -161,12 +123,12 @@ def disabled_check(request, plate_number):
     return Response({'plate_number': plate_number, 'is_disabled': is_disabled})
 
 
-# ── Police 2 노드 ─────────────────────────────────────────────
+# ── AMR2 노드 ─────────────────────────────────────────────────
 
 @extend_schema(
     summary="[AMR2] 목표 좌표 수신",
     description="AMR2가 한 번 호출하여 목표 좌표를 받고 Nav2로 스스로 경로를 계획함. "
-                "status=SCANNED 중 가장 오래된 vehicle_info의 event_id, plate_number, amr_vehicle_x/y를 반환. "
+                "status=SCANNED 중 가장 오래된 vehicle_info의 event_id, plate_number를 반환. "
                 "없으면 vehicle_info=null 반환 → AMR2 제자리 복귀.",
     responses={200: VehicleInfoNextSerializer},
 )
@@ -174,8 +136,6 @@ def disabled_check(request, plate_number):
 def vehicle_next(request):
     vehicle_info = VehicleInfo.objects.filter(
         event__status='SCANNED',
-        amr_vehicle_x__isnull=False,
-        amr_vehicle_y__isnull=False,
     ).order_by('event__created_at').first()
 
     if not vehicle_info:
@@ -185,12 +145,11 @@ def vehicle_next(request):
     return Response(serializer.data)
 
 
-
 @extend_schema(
     summary="[AMR2] 번호판 검증 결과 전송",
     description=(
-        "AMR2가 OCR로 번호판을 재인식한 뒤 저장된 번호판과 비교한 결과를 전송.\n"
-        "- match=true: status → WARNING_ISSUED\n"
+        "AMR2 OCR로 번호판 재인식 후 비교 결과 전송.\n"
+        "- match=true: status → WARNING_ISSUED, ocr_image(base64) 저장\n"
         "- match=false: parking_events + vehicle_info 레코드 삭제"
     ),
     request={
@@ -199,7 +158,8 @@ def vehicle_next(request):
             'properties': {
                 'event_id':     {'type': 'integer'},
                 'match':        {'type': 'boolean'},
-                'plate_number': {'type': 'string', 'description': '일치한 경우 번호판 텍스트 (선택)'},
+                'plate_number': {'type': 'string', 'description': '일치한 경우 번호판 텍스트'},
+                'ocr_image':    {'type': 'string', 'description': 'base64 인코딩된 번호판 이미지 (선택)'},
             },
             'required': ['event_id', 'match'],
         }
@@ -221,6 +181,14 @@ def vehicle_verify(request):
     if match:
         event.status = 'WARNING_ISSUED'
         event.save()
+        ocr_image = request.data.get('ocr_image')
+        if ocr_image:
+            try:
+                vi = event.vehicle_info
+                vi.ocr_image = ocr_image
+                vi.save()
+            except VehicleInfo.DoesNotExist:
+                pass
         return Response({'result': 'matched', 'event_id': event.id, 'status': event.status})
     else:
         event.delete()

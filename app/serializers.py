@@ -17,27 +17,19 @@ class ParkingEventSerializer(serializers.ModelSerializer):
 class ParkingEventNextSerializer(serializers.ModelSerializer):
     class Meta:
         model = ParkingEvent
-        fields = ['id', 'zone_type', 'observation_x', 'observation_y', 'status', 'created_at']
-
-
-
-class ZoneUpdateSerializer(serializers.Serializer):
-    vehicle_type = serializers.ChoiceField(choices=['NORMAL', 'ILLEGAL'])
-    zone_type    = serializers.ChoiceField(choices=['Not', 'NORMAL', 'DISABLED', 'FIRE'])
+        fields = ['id', 'observation_x', 'observation_y', 'status', 'created_at']
 
 
 class VehicleInfoCreateSerializer(serializers.Serializer):
-    event_id       = serializers.IntegerField()
-    plate_number   = serializers.CharField(max_length=20)
-    amr_vehicle_x  = serializers.FloatField(required=False, allow_null=True)
-    amr_vehicle_y  = serializers.FloatField(required=False, allow_null=True)
-    ocr_image_path = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    event_id     = serializers.IntegerField()
+    plate_number = serializers.CharField(max_length=20)
+    ocr_image    = serializers.CharField(required=False, allow_null=True, allow_blank=True)  # base64
 
 
 class VehicleInfoNextSerializer(serializers.ModelSerializer):
     class Meta:
         model = VehicleInfo
-        fields = ['id', 'event_id', 'plate_number', 'amr_vehicle_x', 'amr_vehicle_y']
+        fields = ['id', 'event_id', 'plate_number']
 
 
 class DisabledVehicleSerializer(serializers.ModelSerializer):
