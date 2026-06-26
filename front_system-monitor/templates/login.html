@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>로그인 - 주차 단속 시스템</title>
+    <!-- <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background-color: #f3f4f6;
+        }
+
+        .login-container {
+            width: 100%;
+            max-width: 400px;
+            padding: 30px;
+            border-radius: 8px;
+            background-color: white;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            text-align: center;
+        }
+
+        .login-container h1 {
+            margin-bottom: 10px;
+            font-size: 24px;
+            color: #333;
+        }
+
+        .login-container p.subtitle {
+            color: #888;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+
+        label {
+            display: block;
+            text-align: left;
+            margin-bottom: 5px;
+            color: #666;
+            font-weight: bold;
+        }
+
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+
+        button[type="submit"] {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            background-color: #4CAF50;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        button[type="submit"]:hover {
+            background-color: #45a049;
+        }
+
+        ul {
+            list-style: none;
+            padding: 0;
+            margin-bottom: 15px;
+        }
+
+        ul li {
+            padding: 8px;
+            border-radius: 4px;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+
+        ul li.success { background-color: #d4edda; color: #155724; }
+        ul li.danger  { background-color: #f8d7da; color: #721c24; }
+        ul li.warning { background-color: #fff3cd; color: #856404; }
+        ul li.info    { background-color: #d1ecf1; color: #0c5460; }
+    </style> -->
+   <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+    --bg: #0d0d1a; --card: #181a33; --border: #2a2d52;
+    --accent: #e94560; --text: #f0f1f7; --muted: #9499c2;
+    --success: #22c55e; --danger: #ef4444; --warning: #f59e0b; --info: #3b82f6;
+    }
+    html, body {
+    height: 100%; font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg); color: var(--text);
+    display: flex; align-items: center; justify-content: center;
+    }
+    .login-card {
+    width: 100%; max-width: 380px; padding: 32px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 14px;
+    }
+    .login-logo { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 24px; }
+    .login-logo .icon {
+    width: 48px; height: 48px; background: var(--accent);
+    border-radius: 12px; display: flex; align-items: center; justify-content: center;
+    font-size: 22px;
+    }
+    .login-logo h1 { font-size: 1.1rem; font-weight: 700; }
+    .login-logo p { font-size: 0.78rem; color: var(--muted); }
+
+    .flash-list { list-style: none; margin-bottom: 16px; }
+    .flash-list li { padding: 9px 14px; border-radius: 8px; font-size: 0.8rem; margin-bottom: 6px; }
+    .flash-list li.success { background: rgba(34,197,94,0.12); color: var(--success); }
+    .flash-list li.danger  { background: rgba(239,68,68,0.12); color: var(--danger); }
+    .flash-list li.warning { background: rgba(245,158,11,0.12); color: var(--warning); }
+    .flash-list li.info    { background: rgba(59,130,246,0.12); color: var(--info); }
+
+    label { display: block; font-size: 0.78rem; color: var(--muted); margin-bottom: 6px; }
+    input[type="text"], input[type="password"] {
+    width: 100%; padding: 10px 14px; margin-bottom: 16px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); font-size: 0.88rem; outline: none;
+    }
+    input:focus { border-color: var(--accent); }
+    button[type="submit"] {
+    width: 100%; padding: 11px; border: none; border-radius: 8px;
+    background: var(--accent); color: #fff; font-size: 0.9rem; font-weight: 700;
+    cursor: pointer;
+    }
+    button[type="submit"]:hover { background: #c73652; }
+    </style> 
+</head>
+<!-- <body>
+    <div class="login-container">
+        <h1>System Monitor</h1>
+        <p class="subtitle">불법주차 단속 시스템</p>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <ul>
+                    {% for category, message in messages %}
+                        <li class="{{ category }}">{{ message }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        {% endwith %}
+
+        <form method="POST" action="{{ url_for('login') }}">
+            <label for="username">아이디</label>
+            <input type="text" id="username" name="username" required>
+
+            <label for="password">비밀번호</label>
+            <input type="password" id="password" name="password" required>
+
+            <button type="submit">로그인</button>
+        </form>
+    </div>
+</body> -->
+<body>
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="icon">🚔</div>
+      <h1>System Monitor</h1>
+      <p>불법주차 단속 시스템</p>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <ul class="flash-list">
+          {% for category, message in messages %}
+            <li class="{{ category }}">{{ message }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    <form method="POST" action="{{ url_for('login') }}">
+      <label for="username">아이디</label>
+      <input type="text" id="username" name="username" required>
+
+      <label for="password">비밀번호</label>
+      <input type="password" id="password" name="password" required>
+
+      <button type="submit">로그인</button>
+    </form>
+  </div>
+</body>
+</html>
