@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}단속 리스트 - 주차 단속 시스템{% endblock %}
+{% block page_title %}주차 단속 리스트{% endblock %}
+
+{% block content %}
+<div class="panel">
+  <div class="panel-header">
+    <span class="panel-title">📋 단속 현황 - 위반 차량 조회 및 상태 확인 </span>
+    <div class="filter-tabs">
+      <a href="{{ url_for('violations') }}" class="filter-tab {{ 'active' if not current_status else '' }}">전체</a>
+      <a href="{{ url_for('violations', status='DETECTED') }}" class="filter-tab {{ 'active' if current_status == 'DETECTED' else '' }}">DETECTED</a>
+      <a href="{{ url_for('violations', status='SCANNED') }}" class="filter-tab {{ 'active' if current_status == 'SCANNED' else '' }}">SCANNED</a>
+      <a href="{{ url_for('violations', status='VERIFIED') }}" class="filter-tab {{ 'active' if current_status == 'VERIFIED' else '' }}">VERIFIED</a>
+      <a href="{{ url_for('violations', status='WARNING_ISSUED') }}" class="filter-tab {{ 'active' if current_status == 'WARNING_ISSUED' else '' }}">단속완료</a>
+    </div>
+  </div>
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>구역</th>
+          <th>위치 (x, y)</th>
+          <th>상태</th>
+          <th>탐지시각</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in data %}
+        <tr>
+          <td style="color:var(--muted)">#{{ row.event_id }}</td>
+          <td>
+            {% if row.zone_type %}{{ row.zone_type }}{% else %}<span class="na">-</span>{% endif %}
+          </td>
+          <td class="coord">{{ "%.2f"|format(row.observation_x) }}, {{ "%.2f"|format(row.observation_y) }}</td>
+          <td><span class="badge {{ row.status }}">{{ row.status }}</span></td>
+          <td style="color:var(--muted); font-size:0.78rem;">{{ row.created_at }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="empty">단속 이벤트 기록이 없습니다.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
