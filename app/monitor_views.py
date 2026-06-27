@@ -87,11 +87,9 @@ def summary(request):
         item['status']: item['count']
         for item in ParkingEvent.objects.values('status').annotate(count=Count('id'))
     }
-    by_zone = {
-        item['zone_type']: item['count']
-        for item in ParkingEvent.objects.values('zone_type').annotate(count=Count('id'))
-    }
-    illegal_total = ParkingEvent.objects.filter(vehicle_type='ILLEGAL').count()
+    illegal_total = ParkingEvent.objects.filter(
+        status__in=['SCANNED', 'WARNING_ISSUED']
+    ).count()
     enforced = ParkingEvent.objects.filter(status='WARNING_ISSUED').count()
 
     return Response({
@@ -99,7 +97,6 @@ def summary(request):
         'illegal_total': illegal_total,
         'enforced': enforced,
         'by_status': by_status,
-        'by_zone': by_zone,
     })
 
 
@@ -122,22 +119,18 @@ def event_list(request):
     data = []
     for event in qs:
         item = {
-            'event_id':          event.id,
-            'vehicle_type':      event.vehicle_type,
-            'zone_type':         event.zone_type,
-            'observation_x':     event.observation_x,
-            'observation_y':     event.observation_y,
-            'status':            event.status,
-            'created_at':        event.created_at,
-            'vehicle_info':      None,
+            'event_id':      event.id,
+            'observation_x': event.observation_x,
+            'observation_y': event.observation_y,
+            'status':        event.status,
+            'created_at':    event.created_at,
+            'vehicle_info':  None,
         }
         try:
             vi = event.vehicle_info
             item['vehicle_info'] = {
-                'plate_number':  vi.plate_number,
-                'amr_vehicle_x': vi.amr_vehicle_x,
-                'amr_vehicle_y': vi.amr_vehicle_y,
-                'ocr_image_path': vi.ocr_image_path,
+                'plate_number': vi.plate_number,
+                'ocr_image':    vi.ocr_image,
             }
         except VehicleInfo.DoesNotExist:
             pass
@@ -207,13 +200,11 @@ def plate_match_result(request):
         try:
             vi = event.vehicle_info
             data.append({
-                'event_id':       event.id,
-                'amr1_plate':     vi.plate_number,
-                'match_result':   'MATCHED',
-                'status':         event.status,
-                'amr_vehicle_x':  vi.amr_vehicle_x,
-                'amr_vehicle_y':  vi.amr_vehicle_y,
-                'created_at':     event.created_at,
+                'event_id':     event.id,
+                'amr1_plate':   vi.plate_number,
+                'match_result': 'MATCHED',
+                'status':       event.status,
+                'created_at':   event.created_at,
             })
         except VehicleInfo.DoesNotExist:
             pass

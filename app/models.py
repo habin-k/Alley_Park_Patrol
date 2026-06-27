@@ -8,6 +8,7 @@ class ParkingEvent(models.Model):
         ('WARNING_ISSUED', 'Warning Issued'),
     ]
 
+    vehicle_id    = models.IntegerField(null=True, blank=True)
     observation_x = models.FloatField()
     observation_y = models.FloatField()
     status        = models.CharField(max_length=15, choices=STATUS_CHOICES,

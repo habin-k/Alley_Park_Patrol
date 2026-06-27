@@ -26,6 +26,7 @@ def parking_create(request):
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     event = ParkingEvent.objects.create(
+        vehicle_id=serializer.validated_data.get('vehicle_id'),
         observation_x=serializer.validated_data['observation_x'],
         observation_y=serializer.validated_data['observation_y'],
         status='DETECTED',

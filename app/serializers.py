@@ -5,7 +5,7 @@ from .models import ParkingEvent, VehicleInfo, DisabledVehicle
 class ParkingEventCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = ParkingEvent
-        fields = ['observation_x', 'observation_y']
+        fields = ['vehicle_id', 'observation_x', 'observation_y']
 
 
 class ParkingEventSerializer(serializers.ModelSerializer):
