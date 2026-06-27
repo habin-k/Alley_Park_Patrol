@@ -3,19 +3,54 @@
 {% block page_title %}웹캠 카메라{% endblock %}
 
 {% block content %}
-<div class="panel">
-  <div class="panel-header">
-    <span class="panel-title">📷 Webcam 카메라</span>
-    <span class="live-dot" style="font-size:0.72rem;">실시간</span>
-  </div>
-  <div class="panel-body">
-    <div class="webcam-wrap" style="height:420px;">
-      <div class="webcam-overlay" id="overlay-webcam">
-        <div class="spinner"></div>
-        <span>화면 대기중...</span>
-      </div>
-      <img src="{{ url_for('video_feed_webcam') }}" alt="Webcam 카메라" onload="document.getElementById('overlay-webcam').style.display='none'">
+<div class="grid-2">
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">📷 웹캠 카메라</span>
+      <span class="live-dot" style="font-size:0.72rem;">실시간</span>
     </div>
+    <div class="panel-body" style="padding:12px;">
+      <div class="webcam-wrap" style="height:420px;">
+        <div class="webcam-overlay" id="overlay-webcam">
+          <div class="spinner"></div>
+          <span>화면 대기중...</span>
+        </div>
+        <img src="{{ url_for('video_feed_webcam') }}" alt="Webcam 카메라" onload="document.getElementById('overlay-webcam').style.display='none'">
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">📋 최근 이벤트 (DETECTED)</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>차량번호</th><th>상태</th></tr></thead>
+        <tbody>
+          {% for row in recent_events %}
+          <tr>
+            <td style="color:var(--muted)">#{{ row.event_id }}</td>
+            <td>
+              {% if row.vehicle_info and row.vehicle_info.plate_number %}{{ row.vehicle_info.plate_number }}{% else %}<span class="na">-</span>{% endif %}
+            </td>
+            <td><span class="badge {{ row.status }}">{{ row.status }}</span></td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="3" class="empty">DETECTED 이벤트가 없습니다.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if recent_total > 10 %}
+    <div style="padding:14px 20px; text-align:center;">
+      <a href="{{ url_for('violations', status='DETECTED') }}" style="display:inline-block; padding:8px 16px; background:var(--border); color:var(--text); border-radius:8px; text-decoration:none; font-size:0.82rem; font-weight:600;">
+        더보기 (전체 {{ recent_total }}건)
+      </a>
+    </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

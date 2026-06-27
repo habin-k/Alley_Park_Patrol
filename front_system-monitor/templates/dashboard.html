@@ -3,6 +3,29 @@
 {% block page_title %}대시보드 홈{% endblock %}
 
 {% block content %}
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="s-label">전체 이벤트</div>
+    <div class="s-value c-blue">{{ total_events }}</div>
+    <div class="s-sub">누적 탐지 건수</div>
+  </div>
+  <div class="stat-card">
+    <div class="s-label">불법 주차</div>
+    <div class="s-value c-red">{{ illegal_total }}</div>
+    <div class="s-sub">단속 대상 차량</div>
+  </div>
+  <div class="stat-card">
+    <div class="s-label">단속 완료</div>
+    <div class="s-value c-green">{{ enforced }}</div>
+    <div class="s-sub">WARNING_ISSUED</div>
+  </div>
+  <div class="stat-card">
+    <div class="s-label">번호판 매칭</div>
+    <div class="s-value c-purple">{{ matched }}</div>
+    <div class="s-sub">SCANNED 이상</div>
+  </div>
+</div>
+
 <div class="grid-2">
   <div class="panel">
     <div class="panel-header">

@@ -225,14 +225,24 @@ def dashboard():
     violations_preview = get_violations()
     disabled_preview = get_disabled_list()
 
+    total_events = len(violations_preview)
+    enforced = sum(1 for e in violations_preview if e.get('status') == 'WARNING_ISSUED')
+    matched = sum(1 for e in violations_preview if e.get('vehicle_info'))
+    # '불법 주차(단속 대상)'는 아직 처리 안 끝난 건수로 집계 (전체 - 단속완료)
+    illegal_total = total_events - enforced
+
     return render_template(
         'dashboard.html',
         username=session['username'],
         active_page='dashboard',
         violations_data=violations_preview,
-        violations_total=len(violations_preview),
+        violations_total=total_events,
         disabled_data=disabled_preview,
         disabled_total=len(disabled_preview),
+        total_events=total_events,
+        illegal_total=illegal_total,
+        enforced=enforced,
+        matched=matched,
     )
 
 
@@ -244,7 +254,16 @@ def webcam():
     if 'username' not in session:
         flash('먼저 로그인해주세요.', 'warning')
         return redirect(url_for('login'))
-    return render_template('webcam.html', username=session['username'], active_page='webcam')
+
+    detected_events = get_violations(status_filter='DETECTED')
+
+    return render_template(
+        'webcam.html',
+        username=session['username'],
+        active_page='webcam',
+        recent_events=detected_events[:10],
+        recent_total=len(detected_events),
+    )
 
 
 @app.route('/video_feed_webcam')
@@ -365,10 +384,34 @@ def violations():
     if 'username' not in session:
         flash('먼저 로그인해주세요.', 'warning')
         return redirect(url_for('login'))
+
     status_filter = request.args.get('status', '')  # 쿼리스트링 ?status=SCANNED 등
-    data = get_violations(status_filter if status_filter else None)
-    return render_template('violations.html', username=session['username'],
-                            data=data, current_status=status_filter, active_page='violations')
+    page = request.args.get('page', 1, type=int)
+    if page < 1:
+        page = 1
+
+    PAGE_SIZE = 20
+    all_data = get_violations(status_filter if status_filter else None)
+
+    total_count = len(all_data)
+    total_pages = max(1, (total_count + PAGE_SIZE - 1) // PAGE_SIZE)
+    if page > total_pages:
+        page = total_pages
+
+    start = (page - 1) * PAGE_SIZE
+    end = start + PAGE_SIZE
+    page_data = all_data[start:end]
+
+    return render_template(
+        'violations.html',
+        username=session['username'],
+        data=page_data,
+        current_status=status_filter,
+        active_page='violations',
+        page=page,
+        total_pages=total_pages,
+        total_count=total_count,
+    )
 
 
 if __name__ == "__main__":
