@@ -21,9 +21,9 @@
   --purple:    #b975fb;
   --sidebar-w: 240px;
 }
-html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 16px; }
+html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 16px; }
 
-.layout { display: flex; min-height: 100vh; }
+.layout { display: flex; height: 100vh; overflow: hidden; }
 
 .sidebar {
   width: var(--sidebar-w);
@@ -84,7 +84,7 @@ html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; backg
 }
 .logout-btn:hover { background: rgba(239,68,68,0.1); color: var(--danger); }
 
-.main { flex: 1; min-width: 0; }
+.main { flex: 1; min-width: 0; height: 100vh; overflow-y: auto; }
 .topbar {
   position: sticky; top: 0;
   background: rgba(13,13,26,0.92);
@@ -107,6 +107,18 @@ html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; backg
 .flash-list li.warning { background: rgba(245,158,11,0.12); color: var(--warning); }
 .flash-list li.info    { background: rgba(79,142,247,0.12); color: var(--accent2); }
 
+.stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
+.stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+.stat-card .s-label { font-size: 0.75rem; color: var(--muted); margin-bottom: 8px; }
+.stat-card .s-value { font-size: 1.7rem; font-weight: 700; line-height: 1; margin-bottom: 4px; }
+.stat-card .s-sub { font-size: 0.7rem; color: var(--muted); }
+.c-red { color: var(--accent); }
+.c-blue { color: var(--accent2); }
+.c-green { color: var(--success); }
+.c-purple { color: var(--purple); }
+
+.zone { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 0.72rem; font-weight: 600; background: rgba(148,153,194,0.15); color: var(--muted); }
+
 .panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 20px; }
 .panel-header {
   display: flex; align-items: center; justify-content: space-between;
@@ -126,7 +138,7 @@ html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; backg
   min-height: 280px;
   display: flex; align-items: center; justify-content: center;
 }
-.webcam-wrap img { width: 100%; display: block; border-radius: 8px; }
+.webcam-wrap img { width: 100%; height: 100%; display: block; border-radius: 8px; object-fit: contain; }
 
 .webcam-overlay {
   position: absolute; inset: 0;
@@ -152,7 +164,6 @@ html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; backg
 .badge::before { content:''; width:5px; height:5px; border-radius:50%; }
 .badge.DETECTED       { background:rgba(34,197,94,0.12);  color:var(--success); } .badge.DETECTED::before { background:var(--success); }
 .badge.SCANNED        { background:rgba(79,142,247,0.12); color:var(--accent2); } .badge.SCANNED::before  { background:var(--accent2); }
-.badge.VERIFIED       { background:rgba(168,85,247,0.12); color:var(--purple);  } .badge.VERIFIED::before { background:var(--purple); }
 .badge.WARNING_ISSUED { background:rgba(239,68,68,0.12);  color:var(--danger);  } .badge.WARNING_ISSUED::before { background:var(--danger); }
 
 .tbl-wrap { overflow-x: auto; }
@@ -164,6 +175,8 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 
 .filter-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
 .filter-tab {
+  display: inline-flex;
+  align-items: center;
   padding: 5px 14px; border-radius: 20px; font-size: 0.75rem; font-weight: 600;
   border: 1px solid var(--border); color: var(--muted);
   background: none; text-decoration: none;
@@ -206,8 +219,11 @@ tr:hover td { background: rgba(255,255,255,0.02); }
       <a class="nav-item {% if active_page == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">
         <span class="nav-icon">🏠</span> 대시보드 홈
       </a>
+      <a class="nav-item {% if active_page == 'webcam' %}active{% endif %}" href="{{ url_for('webcam') }}">
+        <span class="nav-icon">📷</span> 웹캠 카메라
+      </a>
       <a class="nav-item {% if active_page == 'cameras' %}active{% endif %}" href="{{ url_for('cameras') }}">
-        <span class="nav-icon">📷</span> 실시간 카메라
+        <span class="nav-icon">🤖</span> AMR 카메라
       </a>
       <div class="nav-label">관리</div>
       <a class="nav-item {% if active_page == 'disabled' %}active{% endif %}" href="{{ url_for('disabled') }}">
