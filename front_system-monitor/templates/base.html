@@ -206,8 +206,11 @@ tr:hover td { background: rgba(255,255,255,0.02); }
       <a class="nav-item {% if active_page == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">
         <span class="nav-icon">🏠</span> 대시보드 홈
       </a>
+      <a class="nav-item {% if active_page == 'webcam' %}active{% endif %}" href="{{ url_for('webcam') }}">
+        <span class="nav-icon">📷</span> 웹캠 카메라
+      </a>
       <a class="nav-item {% if active_page == 'cameras' %}active{% endif %}" href="{{ url_for('cameras') }}">
-        <span class="nav-icon">📷</span> 실시간 카메라
+        <span class="nav-icon">🤖</span> AMR 카메라
       </a>
       <div class="nav-label">관리</div>
       <a class="nav-item {% if active_page == 'disabled' %}active{% endif %}" href="{{ url_for('disabled') }}">

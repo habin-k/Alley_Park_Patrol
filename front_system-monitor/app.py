@@ -81,19 +81,25 @@ def delete_disabled(plate_number):
 
 
 # ----------------------------------------
-# AMR1 카메라 - ROS2 Subscriber (compressed 토픽 구독)
+# AMR1, AMR2 카메라 - ROS2 Subscriber (compressed 토픽 구독)
 # Flask 프로세스 안에서 별도 스레드로 rclpy spin을 돌리고,
-# 콜백에서 최신 프레임(JPEG bytes)을 amr1_latest_frame에 저장한다.
+# 콜백에서 최신 프레임(JPEG bytes)을 각각의 전역 변수에 저장한다.
 # ----------------------------------------
-AMR1_IMAGE_TOPIC = '/robot2/oakd/rgb/image_raw/compressed'  # 실제 확인된 토픽명
+AMR1_IMAGE_TOPIC = '/robot2/oakd/rgb/image_raw/compressed'  # AMR1 실제 확인된 토픽명
+AMR2_IMAGE_TOPIC = '/robot4/oakd/rgb/image_raw/compressed'  # AMR2 토픽명
 
 amr1_latest_frame = None
 amr1_frame_lock = threading.Lock()
 
+amr2_latest_frame = None
+amr2_frame_lock = threading.Lock()
 
-class Amr1CameraSubscriber(Node):
+
+class AmrCameraSubscriber(Node):
+    """AMR1, AMR2 카메라 토픽을 동시에 구독하는 노드"""
+
     def __init__(self):
-        super().__init__('amr1_camera_subscriber')
+        super().__init__('amr_camera_subscriber')
         qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,  # Publisher가 RELIABLE이므로 맞춰줌
             history=HistoryPolicy.KEEP_LAST,
@@ -102,11 +108,17 @@ class Amr1CameraSubscriber(Node):
         self.create_subscription(
             CompressedImage,
             AMR1_IMAGE_TOPIC,
-            self.image_callback,
+            self.image_callback_amr1,
+            qos
+        )
+        self.create_subscription(
+            CompressedImage,
+            AMR2_IMAGE_TOPIC,
+            self.image_callback_amr2,
             qos
         )
 
-    def image_callback(self, msg):
+    def image_callback_amr1(self, msg):
         global amr1_latest_frame
         try:
             with amr1_frame_lock:
@@ -116,11 +128,19 @@ class Amr1CameraSubscriber(Node):
             # 콜백 안에서 예외가 나도 spin() 전체가 죽지 않도록 방지
             print(f"[AMR1 CAM] 콜백 에러: {e}")
 
+    def image_callback_amr2(self, msg):
+        global amr2_latest_frame
+        try:
+            with amr2_frame_lock:
+                amr2_latest_frame = bytes(msg.data)
+        except Exception as e:
+            print(f"[AMR2 CAM] 콜백 에러: {e}")
+
 
 def start_ros2_spin():
     """ROS2 노드를 백그라운드 스레드에서 spin"""
     rclpy.init()
-    node = Amr1CameraSubscriber()
+    node = AmrCameraSubscriber()
     try:
         rclpy.spin(node)
     finally:
@@ -217,7 +237,29 @@ def dashboard():
 
 
 # ----------------------------------------
-# 실시간 카메라 페이지
+# 웹캠 페이지 (독립 페이지)
+# ----------------------------------------
+@app.route('/webcam')
+def webcam():
+    if 'username' not in session:
+        flash('먼저 로그인해주세요.', 'warning')
+        return redirect(url_for('login'))
+    return render_template('webcam.html', username=session['username'], active_page='webcam')
+
+
+@app.route('/video_feed_webcam')
+def video_feed_webcam():
+    # 방 구석 웹캠 - 백엔드 API에서 base64 프레임 수신
+    response = Response(generate_webcam_frames(),
+                         mimetype='multipart/x-mixed-replace; boundary=frame')
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
+
+
+# ----------------------------------------
+# 실시간 카메라 페이지 (AMR1 + AMR2)
 # ----------------------------------------
 @app.route('/cameras')
 def cameras():
@@ -227,19 +269,8 @@ def cameras():
     return render_template('cameras.html', username=session['username'], active_page='cameras')
 
 
-@app.route('/video_feed1')
-def video_feed1():
-    # Detection 카메라 (방 구석 웹캠 - 백엔드 API에서 base64 프레임 수신)
-    response = Response(generate_webcam_frames(),
-                         mimetype='multipart/x-mixed-replace; boundary=frame')
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
-    return response
-
-
 def generate_amr1_frames():
-    """ROS2 Subscriber가 받아둔 최신 프레임을 MJPEG로 스트리밍"""
+    """ROS2 Subscriber가 받아둔 AMR1 최신 프레임을 MJPEG로 스트리밍"""
     import time
     while True:
         with amr1_frame_lock:
@@ -250,10 +281,33 @@ def generate_amr1_frames():
         time.sleep(1 / 15)  # 약 15fps로 제한 (트래픽/CPU 절감)
 
 
-@app.route('/video_feed2')
-def video_feed2():
+def generate_amr2_frames():
+    """ROS2 Subscriber가 받아둔 AMR2 최신 프레임을 MJPEG로 스트리밍"""
+    import time
+    while True:
+        with amr2_frame_lock:
+            frame = amr2_latest_frame
+        if frame is not None:
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+        time.sleep(1 / 15)
+
+
+@app.route('/video_feed_amr1')
+def video_feed_amr1():
     # AMR1 카메라 (ROS2 /compressed 토픽 구독 → 실시간 스트리밍)
     response = Response(generate_amr1_frames(),
+                         mimetype='multipart/x-mixed-replace; boundary=frame')
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
+
+
+@app.route('/video_feed_amr2')
+def video_feed_amr2():
+    # AMR2 카메라 (ROS2 /compressed 토픽 구독 → 실시간 스트리밍)
+    response = Response(generate_amr2_frames(),
                          mimetype='multipart/x-mixed-replace; boundary=frame')
     response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     response.headers['Pragma'] = 'no-cache'

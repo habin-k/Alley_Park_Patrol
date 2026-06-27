@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}웹캠 - 주차 단속 시스템{% endblock %}
+{% block page_title %}웹캠 카메라{% endblock %}
+
+{% block content %}
+<div class="panel">
+  <div class="panel-header">
+    <span class="panel-title">📷 Webcam 카메라</span>
+    <span class="live-dot" style="font-size:0.72rem;">실시간</span>
+  </div>
+  <div class="panel-body">
+    <div class="webcam-wrap" style="height:420px;">
+      <div class="webcam-overlay" id="overlay-webcam">
+        <div class="spinner"></div>
+        <span>화면 대기중...</span>
+      </div>
+      <img src="{{ url_for('video_feed_webcam') }}" alt="Webcam 카메라" onload="document.getElementById('overlay-webcam').style.display='none'">
+    </div>
+  </div>
+</div>
+{% endblock %}
