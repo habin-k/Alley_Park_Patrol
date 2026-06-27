@@ -3,7 +3,12 @@
 ## 전체 프로세스
 
 ### 1단계 - 웹캠 + YOLO (탐지 및 좌표 전송)
-웹캠이 주차장을 실시간으로 모니터링하며 YOLO 모델로 차량 객체를 탐지한다. 탐지된 차량의 Nav2 충돌 방지 보정 좌표(`observation_x/y`)를 계산하여 `parking_events` 테이블에 저장한다. 이 시점에서 `status=DETECTED`로 설정된다. **웹캠은 좌표만 전송하며, zone_type과 vehicle_type은 판별하지 않는다.**
+웹캠이 주차장을 실시간으로 모니터링하며 YOLO 모델로 차량 객체를 탐지한다. 탐지된 차량의 Nav2 충돌 방지 보정 좌표(`observation_x/y`)를 계산하고, confidence가 높은 순서로 `vehicle_id`를 부여하여 `parking_events` 테이블에 저장한다. 이 시점에서 `status=DETECTED`로 설정된다. **웹캠은 좌표와 vehicle_id만 전송하며, zone_type과 vehicle_type은 판별하지 않는다. zone_type/vehicle_type은 DB에 저장되지 않고 AMR 내부에서만 사용한다.**
+
+브리지(`bridge_webcam.py`)는 이전 프레임과 현재 프레임을 **diff 비교**하여 처리한다:
+- **새로 생긴 차량** → `POST /api/parking/` → 서버에서 받은 `event_id` 저장
+- **없어진 차량** → `DELETE /api/parking/<event_id>/delete/`
+- **그대로인 차량** → 아무것도 안 함
 
 ### 2단계 - AMR1 (Police 1) - 현장 판별 + 번호판 OCR
 AMR1이 서버에서 `observation_x/y` 좌표를 **한 번** 수신한 뒤, Nav2로 **자율적으로 경로를 계획하여** 이동한다. 서버는 좌표를 제공할 뿐 경로 안내를 하지 않는다. 현장 도착 후 두 가지 방법으로 `zone_type`을 판별한다:
@@ -11,10 +16,29 @@ AMR1이 서버에서 `observation_x/y` 좌표를 **한 번** 수신한 뒤, Nav2
 - **주황색 주차선 감지 시** → `zone_type=NORMAL` → 정상 주차로 판단하여 **스킵**
 - **주황색 주차선 없음** → AMR 팀원이 맵에 사전 정의한 구역 좌표와 로봇의 현재 위치를 비교하여 가장 가까운 구역(`COMPACT` / `DISABLED` / `FIRE` / `EV` / `Not`)을 판별
 
-`vehicle_type=ILLEGAL`로 판단되면 OCR로 번호판 인식 후 `vehicle_info` 테이블에 저장(plate_number, amr_vehicle_x/y, ocr_image_path)하고 `status=SCANNED`으로 업데이트한다. `disabled_vehicle`에 등록된 장애인 차량은 스킵한다.
+불법 주차로 판단되면 OCR로 번호판 인식 후 `vehicle_info` 테이블에 저장(`plate_number`, `ocr_image`: base64 인코딩 이미지)하고 `status=SCANNED`으로 업데이트한다. `disabled_vehicle`에 등록된 장애인 차량은 스킵한다. **zone_type/vehicle_type은 DB에 저장하지 않으며 AMR 내부에서만 사용한다.**
 
 ### 3단계 - AMR2 (Police 2) - 번호판 검증 + 경보
-AMR2가 서버에서 `amr_vehicle_x/y` 좌표를 **한 번** 수신한 뒤, Nav2로 **자율적으로 경로를 계획하여** 이동한다. 서버는 좌표를 제공할 뿐 경로 안내를 하지 않는다. 도착 후 YOLO로 번호판 위치를 찾고 OCR 노드에서 번호판 텍스트를 추출하여, DB에 저장된 `plate_number`와 비교한다. 일치하면 `event_id`와 번호판 텍스트를 서버에 전송 → `status=WARNING_ISSUED`로 변경 + 경보 발령. 불일치하면 서버에 `match=false` + `event_id` 전송 → 해당 이벤트 삭제. 좌표가 없으면 제자리로 복귀한다.
+AMR2가 서버에서 `vehicle_id`와 `observation_x/y` 좌표를 **한 번** 수신한 뒤, Nav2로 **자율적으로 경로를 계획하여** 이동한다. 서버는 좌표를 제공할 뿐 경로 안내를 하지 않는다. 좌표가 없으면 제자리로 복귀한다.
+
+도착 후 zone_type에 따라 처리 방식이 다르다. **주차 구역 정보는 DB에 저장되지 않으며, AMR 내부에 사전 정의되어 있다.**
+
+#### DISABLED (장애인 전용) 구역
+1. YOLO + OCR로 번호판 텍스트 추출
+2. 서버에 `plate_number` + `event_id` 전송
+3. 서버가 `disabled_vehicle` 테이블 조회 후 `True` / `False` 반환
+   - `True` (장애인 차량, 정상) → 서버가 해당 `event_id` 삭제
+   - `False` (불법) → AMR2가 서버에 `event_id` + base64 인코딩 이미지 전송 → `status=WARNING_ISSUED`
+
+#### FIRE (소방차 전용) 구역
+- 소방차는 전용 번호판을 사용하므로 번호판으로 소방차 여부를 판별한다
+1. YOLO + OCR로 번호판 텍스트 추출
+2. 서버로부터 AMR1이 저장한 `plate_number`를 수신하여 plate-match 수행
+   - `true` (일치, 실제 소방차) → 정상 주차 → 서버에 `event_id` 전송 → 서버가 해당 event 삭제
+   - `false` (불일치, 소방차 아님) → 불법 주차 → 서버에 `event_id` + base64 인코딩 이미지 전송 → `status=WARNING_ISSUED`
+
+#### 그 외 구역 (COMPACT / EV / Not)
+YOLO로 번호판 위치를 찾고 OCR로 번호판 텍스트를 추출하여 DB에 저장된 `plate_number`와 비교한다. 일치하면 `event_id`를 서버에 전송 → `status=WARNING_ISSUED` + 경보 발령. 불일치하면 서버에 `match=false` + `event_id` 전송 → 해당 이벤트 삭제.
 
 ## status 흐름
 
@@ -28,8 +52,8 @@ DETECTED → SCANNED → WARNING_ISSUED
 | 노드 | 역할 | DB 작업 |
 |------|------|---------|
 | **웹캠 + YOLO** | 차량 탐지, bbox 좌표 계산 | `parking_events` INSERT (`status=DETECTED`) |
-| **AMR1 (Police 1)** | 주차선 색 판별 + 맵 좌표 비교로 구역 판단, 번호판 OCR | `parking_events` zone_type/vehicle_type UPDATE + `vehicle_info` INSERT + `status=SCANNED` |
-| **AMR2 (Police 2)** | YOLO로 번호판 탐지, OCR 텍스트 추출 후 비교, 경보 발령 | match=true → `parking_events.status` = `WARNING_ISSUED` / match=false → 이벤트 삭제 |
+| **AMR1 (Police 1)** | 주차선 색 판별 + 맵 좌표 비교로 구역 판단 (AMR 내부), 번호판 OCR | `vehicle_info` INSERT (`plate_number`, `ocr_image`) + `parking_events.status=SCANNED` |
+| **AMR2 (Police 2)** | YOLO로 번호판 탐지, OCR 텍스트 추출 후 구역별 검증, 경보 발령 | 정상 → 이벤트 삭제 / 불법 → `status=WARNING_ISSUED` + base64 이미지 수신 |
 
 ## 주차 구역 종류 (zone_type)
 
@@ -38,7 +62,7 @@ DETECTED → SCANNED → WARNING_ISSUED
 | `NORMAL` | 주황색 주차선 감지 | 정상 주차구역 | **스킵** |
 | `COMPACT` | 맵 좌표 비교 | 경차 전용 (AMR팀 사전 정의) | 불법 처리 |
 | `DISABLED` | 맵 좌표 비교 | 장애인 전용 (AMR팀 사전 정의) | `disabled_vehicle` 조회 후 판단 |
-| `FIRE` | 맵 좌표 비교 | 소방차 전용 (AMR팀 사전 정의) | 항상 불법 |
+| `FIRE` | 맵 좌표 비교 | 소방차 전용 (AMR팀 사전 정의) | 번호판 plate-match → 소방차면 정상, 아니면 불법 |
 | `EV` | 맵 좌표 비교 | 전기차 전용 (AMR팀 사전 정의) | 불법 처리 |
 | `Not` | 주차선 없음 | 주차 구역 아님 | 불법 처리 |
 
@@ -67,23 +91,24 @@ DETECTED → SCANNED → WARNING_ISSUED
 ### parking_events
 | 컬럼 | 타입 | 설명 |
 |------|------|------|
-| `id` | int | PK, Auto Increment |
-| `vehicle_type` | varchar | `NORMAL`(정상) / `ILLEGAL`(불법) — AMR1이 판별 |
-| `zone_type` | varchar | `NORMAL` / `COMPACT` / `DISABLED` / `FIRE` / `EV` / `Not` — AMR1이 판별 |
+| `id` | int | PK, Auto Increment (DB 내부용) |
+| `vehicle_id` | int | 웹캠이 confidence 높은 순으로 부여하는 차량 식별자. AMR1/AMR2가 차량 구분에 사용 (nullable) |
 | `observation_x` | float | Nav2 안전 접근 보정 x 좌표 |
 | `observation_y` | float | Nav2 안전 접근 보정 y 좌표 |
 | `status` | varchar | `DETECTED` / `SCANNED` / `WARNING_ISSUED` (인덱스, 기본값 DETECTED) |
 | `created_at` | timestamp | 최초 웹캠 감지 시각 (자동) |
 
+> **vehicle_id vs id 구분**
+> - `id`: Django 자동 생성 PK. DB 관계 유지용 (vehicle_info FK 등). 코드 내부에서 사용.
+> - `vehicle_id`: 웹캠이 부여하는 운영 식별자. AMR 간 차량 추적에 사용.
+
 ### vehicle_info
 | 컬럼 | 타입 | 설명 |
 |------|------|------|
-| `id` | int | PK, Auto Increment |
-| `event_id` | int (FK) | parking_events 참조 (CASCADE, related_name='vehicle_info') |
+| `id` | int | PK, Auto Increment (DB 내부용) |
+| `event_id` | int (FK) | parking_events.id 참조 (CASCADE, related_name='vehicle_info') |
 | `plate_number` | varchar | AMR1 OCR 인식 번호판 텍스트 |
-| `ocr_image_path` | text | AMR1 근접 촬영 번호판 이미지 경로 (nullable) |
-| `amr_vehicle_x` | float | AMR1이 번호판 인식 시 차량 x 좌표 → AMR2 이동 목표 (nullable) |
-| `amr_vehicle_y` | float | AMR1이 번호판 인식 시 차량 y 좌표 → AMR2 이동 목표 (nullable) |
+| `ocr_image` | text | AMR1 근접 촬영 번호판 이미지 (base64 인코딩, nullable) |
 | `updated_at` | timestamp | 마지막 수정 시각 (자동) |
 
 ### disabled_vehicle
@@ -105,10 +130,9 @@ DETECTED → SCANNED → WARNING_ISSUED
 ### AMR1 (Police 1)
 | Method | URL | 설명 |
 |--------|-----|------|
-| GET | `/api/parking/next/` | DETECTED 이벤트의 좌표를 **한 번** 수신 → AMR1이 Nav2로 자율 경로 계획 |
-| PATCH | `/api/parking/<id>/zone/` | zone_type / vehicle_type 업데이트 |
+| GET | `/api/parking/next/` | DETECTED 이벤트의 `vehicle_id` + 좌표를 **한 번** 수신 → AMR1이 Nav2로 자율 경로 계획 |
 | GET | `/api/disabled/<번호판>/` | 장애인 차량 여부 확인 |
-| POST | `/api/vehicle/` | 번호판 저장 + status → SCANNED |
+| POST | `/api/vehicle/` | 번호판(`plate_number`) + base64 이미지(`ocr_image`) 저장 + status → SCANNED |
 
 ### AMR2 (Police 2)
 | Method | URL | 설명 |

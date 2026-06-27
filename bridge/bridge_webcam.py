@@ -88,8 +88,9 @@ class WebcamBridge(Node):
 
     Attributes:
         bridge        : CvBridge — ROS2 Image 메시지를 OpenCV 이미지로 변환하는 도구
-        _sent_coords  : set — 이미 서버로 전송한 차량 좌표 집합.
-                        같은 차량이 매 프레임마다 반복 탐지되는 것을 방지하기 위해 사용.
+        _prev_coords  : dict — 이전 프레임에서 탐지된 차량 좌표와 event_id 매핑.
+                        key: (round(x,1), round(y,1)), value: event_id
+                        diff 비교로 새 차량 POST / 없어진 차량 DELETE 처리에 사용.
     """
 
     def __init__(self):
@@ -97,15 +98,15 @@ class WebcamBridge(Node):
         [메서드] 노드 초기화.
 
         - CvBridge 생성
-        - 중복 좌표 방지용 set 초기화
+        - diff용 이전 좌표 dict 초기화
         - ROS2 토픽 2개 구독 등록
         """
         super().__init__('webcam_bridge')
         self.bridge = CvBridge()
 
-        # 이미 전송한 좌표를 기억하는 집합 (소수점 1자리로 반올림한 튜플)
-        # 예: {(0.6, -1.4), (1.2, 0.3)} → 동일 차량의 중복 전송 방지
-        self._sent_coords = set()
+        # 이전 프레임 좌표 → event_id 매핑 (diff 비교용)
+        # 예: {(1.0, 2.0): 3} → 좌표 (1.0, 2.0)의 차량이 event_id=3
+        self._prev_coords = {}
 
         # 웹캠1: 바운딩박스가 그려진 탐지 결과 이미지 → 시스템 모니터 표시용
         self.create_subscription(
@@ -145,20 +146,44 @@ class WebcamBridge(Node):
             daemon=True,
         ).start()
 
+    def _post_parking(self, x, y, vehicle_id):
+        """
+        [메서드] POST /api/parking/ 동기 호출. 서버로부터 event_id를 받아야 하므로 동기 처리.
+
+        Returns:
+            int : 생성된 event_id. 실패 시 None.
+        """
+        try:
+            payload = {'observation_x': x, 'observation_y': y}
+            if vehicle_id is not None:
+                payload['vehicle_id'] = vehicle_id
+            resp = requests.post(f'{SERVER}/api/parking/', json=payload, timeout=2)
+            if resp.status_code == 201:
+                return resp.json().get('event_id')
+        except Exception:
+            pass
+        return None
+
+    def _delete_parking(self, event_id):
+        """[메서드] DELETE /api/parking/<id>/delete/ 비동기 호출."""
+        def _do():
+            try:
+                requests.delete(f'{SERVER}/api/parking/{event_id}/delete/', timeout=2)
+            except Exception:
+                pass
+        threading.Thread(target=_do, daemon=True).start()
+
     def _map_detections_cb(self, msg):
         """
         [콜백] 차량 맵 좌표 JSON 수신 시 호출된다.
 
-        std_msgs/String 메시지의 data 필드에 담긴 JSON 문자열을 파싱하여
-        각 차량 객체의 맵 좌표(x, y)를 추출하고
-        서버의 /api/parking/ 엔드포인트로 POST 요청을 전송한다.
+        이전 프레임과 현재 프레임을 diff 비교하여:
+          - 새로 생긴 차량 → POST → event_id 저장
+          - 없어진 차량    → DELETE
+          - 그대로인 차량  → 아무것도 안 함
 
         기대하는 JSON 형식:
-          {"objects": [{"x": 0.5, "y": -1.2}, ...]}
-
-        중복 전송 방지 로직:
-          1. x == 0.0 또는 y == 0.0 이면 무효 좌표로 스킵
-          2. 이미 전송한 좌표(소수점 1자리 기준)는 재전송 안 함
+          {"objects": [{"x": 0.5, "y": -1.2, "vehicle_id": 1}, ...]}
 
         Args:
             msg : std_msgs/String — JSON 문자열이 담긴 메시지
@@ -169,28 +194,34 @@ class WebcamBridge(Node):
             self.get_logger().warn(f'JSON 파싱 실패: {msg.data[:80]}')
             return
 
+        # 현재 프레임 좌표 추출
+        current_coords = {}
         for obj in data.get('objects', []):
             x = obj.get('x', 0.0)
             y = obj.get('y', 0.0)
+            vehicle_id = obj.get('vehicle_id')
 
-            # 무효 좌표 필터링
             if x == 0.0 or y == 0.0:
                 self.get_logger().warn(f'무효 좌표 스킵: ({x:.2f}, {y:.2f})')
                 continue
 
-            # 소수점 1자리로 반올림하여 중복 여부 확인
             key = (round(x, 1), round(y, 1))
-            if key in self._sent_coords:
-                continue
+            current_coords[key] = (x, y, vehicle_id)
 
-            self._sent_coords.add(key)
-            payload = {'observation_x': x, 'observation_y': y}
-            threading.Thread(
-                target=_post,
-                args=(f'{SERVER}/api/parking/', payload),
-                daemon=True,
-            ).start()
-            self.get_logger().info(f'좌표 전송: ({x:.2f}, {y:.2f})')
+        # 새로 생긴 차량 → POST
+        for key, (x, y, vehicle_id) in current_coords.items():
+            if key not in self._prev_coords:
+                event_id = self._post_parking(x, y, vehicle_id)
+                if event_id is not None:
+                    self._prev_coords[key] = event_id
+                    self.get_logger().info(f'새 차량 등록: ({x:.2f}, {y:.2f}) event_id={event_id}')
+
+        # 없어진 차량 → DELETE
+        for key in list(self._prev_coords.keys()):
+            if key not in current_coords:
+                event_id = self._prev_coords.pop(key)
+                self._delete_parking(event_id)
+                self.get_logger().info(f'차량 제거: event_id={event_id}')
 
 
 def main():
