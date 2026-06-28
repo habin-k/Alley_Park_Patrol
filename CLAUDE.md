@@ -3,7 +3,7 @@
 ## 전체 프로세스
 
 ### 1단계 - 웹캠 + YOLO (탐지 및 좌표 전송)
-웹캠이 주차장을 실시간으로 모니터링하며 YOLO 모델로 차량 객체를 탐지한다. 탐지된 차량의 Nav2 충돌 방지 보정 좌표(`observation_x/y`)를 계산하여 `parking_events` 테이블에 저장한다. 이 시점에서 `status=DETECTED`로 설정된다. **웹캠은 좌표만 전송하며, zone_type과 vehicle_type은 판별하지 않는다.**
+웹캠이 주차장을 실시간으로 모니터링하며 YOLO 모델로 차량 객체를 탐지한다. 탐지된 차량의 Nav2 충돌 방지 보정 좌표(`observation_x/y`)를 계산하고, confidence가 높은 순서로 `event_id`를 부여하여 서버로 전송한다. 서버는 이를 `parking_events.vehicle_id` 컬럼에 저장한다. 이 시점에서 `status=DETECTED`로 설정된다. **웹캠은 좌표와 event_id만 전송하며, zone_type과 vehicle_type은 판별하지 않는다.**
 
 ### 2단계 - AMR1 (Police 1) - 현장 판별 + 번호판 OCR
 AMR1이 서버에서 `observation_x/y` 좌표를 **한 번** 수신한 뒤, Nav2로 **자율적으로 경로를 계획하여** 이동한다. 서버는 좌표를 제공할 뿐 경로 안내를 하지 않는다. 현장 도착 후 두 가지 방법으로 `zone_type`을 판별한다:
@@ -27,9 +27,9 @@ DETECTED → SCANNED → WARNING_ISSUED
 
 | 노드 | 역할 | DB 작업 |
 |------|------|---------|
-| **웹캠 + YOLO** | 차량 탐지, bbox 좌표 계산 | `parking_events` INSERT (`status=DETECTED`) |
-| **AMR1 (Police 1)** | 주차선 색 판별 + 맵 좌표 비교로 구역 판단, 번호판 OCR | `parking_events` zone_type/vehicle_type UPDATE + `vehicle_info` INSERT + `status=SCANNED` |
-| **AMR2 (Police 2)** | YOLO로 번호판 탐지, OCR 텍스트 추출 후 비교, 경보 발령 | match=true → `parking_events.status` = `WARNING_ISSUED` / match=false → 이벤트 삭제 |
+| **웹캠 + YOLO** | 차량 탐지, bbox 좌표 계산 | `parking_events` INSERT (`vehicle_id`, `observation_x/y`, `status=DETECTED`) |
+| **AMR1 (Police 1)** | 주차선 색 판별 + 맵 좌표 비교로 구역 판단 (AMR 내부), 번호판 OCR | `vehicle_info` INSERT (`plate_number`, `ocr_image`) + `parking_events.status=SCANNED` |
+| **AMR2 (Police 2)** | YOLO로 번호판 탐지, OCR 텍스트 추출 후 구역별 검증, 경보 발령 | 정상 → 이벤트 삭제 / 불법 → `status=WARNING_ISSUED` + base64 이미지 수신 |
 
 ## 주차 구역 종류 (zone_type)
 
@@ -67,9 +67,8 @@ DETECTED → SCANNED → WARNING_ISSUED
 ### parking_events
 | 컬럼 | 타입 | 설명 |
 |------|------|------|
-| `id` | int | PK, Auto Increment |
-| `vehicle_type` | varchar | `NORMAL`(정상) / `ILLEGAL`(불법) — AMR1이 판별 |
-| `zone_type` | varchar | `NORMAL` / `COMPACT` / `DISABLED` / `FIRE` / `EV` / `Not` — AMR1이 판별 |
+| `id` | int | PK, Auto Increment (DB 내부용) |
+| `vehicle_id` | int | 웹캠이 `event_id` 이름으로 전송한 차량 식별자 (nullable). AMR 간 차량 추적에 사용 |
 | `observation_x` | float | Nav2 안전 접근 보정 x 좌표 |
 | `observation_y` | float | Nav2 안전 접근 보정 y 좌표 |
 | `status` | varchar | `DETECTED` / `SCANNED` / `WARNING_ISSUED` (인덱스, 기본값 DETECTED) |
@@ -78,12 +77,10 @@ DETECTED → SCANNED → WARNING_ISSUED
 ### vehicle_info
 | 컬럼 | 타입 | 설명 |
 |------|------|------|
-| `id` | int | PK, Auto Increment |
-| `event_id` | int (FK) | parking_events 참조 (CASCADE, related_name='vehicle_info') |
+| `id` | int | PK, Auto Increment (DB 내부용) |
+| `event_id` | int (FK) | parking_events.id 참조 (CASCADE, related_name='vehicle_info') |
 | `plate_number` | varchar | AMR1 OCR 인식 번호판 텍스트 |
-| `ocr_image_path` | text | AMR1 근접 촬영 번호판 이미지 경로 (nullable) |
-| `amr_vehicle_x` | float | AMR1이 번호판 인식 시 차량 x 좌표 → AMR2 이동 목표 (nullable) |
-| `amr_vehicle_y` | float | AMR1이 번호판 인식 시 차량 y 좌표 → AMR2 이동 목표 (nullable) |
+| `ocr_image` | text | AMR1 근접 촬영 번호판 이미지 (base64 인코딩, nullable) |
 | `updated_at` | timestamp | 마지막 수정 시각 (자동) |
 
 ### disabled_vehicle
@@ -105,10 +102,9 @@ DETECTED → SCANNED → WARNING_ISSUED
 ### AMR1 (Police 1)
 | Method | URL | 설명 |
 |--------|-----|------|
-| GET | `/api/parking/next/` | DETECTED 이벤트의 좌표를 **한 번** 수신 → AMR1이 Nav2로 자율 경로 계획 |
-| PATCH | `/api/parking/<id>/zone/` | zone_type / vehicle_type 업데이트 |
+| GET | `/api/parking/next/` | DETECTED 이벤트의 `vehicle_id` + 좌표를 **한 번** 수신 → AMR1이 Nav2로 자율 경로 계획 |
 | GET | `/api/disabled/<번호판>/` | 장애인 차량 여부 확인 |
-| POST | `/api/vehicle/` | 번호판 저장 + status → SCANNED |
+| POST | `/api/vehicle/` | 번호판(`plate_number`) + base64 이미지(`ocr_image`) 저장 + status → SCANNED |
 
 ### AMR2 (Police 2)
 | Method | URL | 설명 |

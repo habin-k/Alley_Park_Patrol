@@ -2,10 +2,10 @@ from rest_framework import serializers
 from .models import ParkingEvent, VehicleInfo, DisabledVehicle
 
 
-class ParkingEventCreateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ParkingEvent
-        fields = ['vehicle_id', 'observation_x', 'observation_y']
+class ParkingEventCreateSerializer(serializers.Serializer):
+    event_id      = serializers.IntegerField(required=False, allow_null=True)
+    observation_x = serializers.FloatField()
+    observation_y = serializers.FloatField()
 
 
 class ParkingEventSerializer(serializers.ModelSerializer):
