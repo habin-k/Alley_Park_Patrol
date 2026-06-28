@@ -54,6 +54,7 @@ DETECTED → SCANNED → WARNING_ISSUED
 | **웹캠 + YOLO** | 차량 탐지, bbox 좌표 계산 | `parking_events` INSERT (`status=DETECTED`) |
 | **AMR1 (Police 1)** | 주차선 색 판별 + 맵 좌표 비교로 구역 판단 (AMR 내부), 번호판 OCR | `vehicle_info` INSERT (`plate_number`, `ocr_image`) + `parking_events.status=SCANNED` |
 | **AMR2 (Police 2)** | YOLO로 번호판 탐지, OCR 텍스트 추출 후 구역별 검증, 경보 발령 | 정상 → 이벤트 삭제 / 불법 → `status=WARNING_ISSUED` + base64 이미지 수신 |
+| **bridge_ocr.py** | OCR 노드(plate_ocr_node.py) ↔ Django 서버 중계. vehicle_id → DB id 변환 담당 | 직접 DB 접근 없음 (HTTP API 경유) |
 
 ## 주차 구역 종류 (zone_type)
 
@@ -139,6 +140,30 @@ DETECTED → SCANNED → WARNING_ISSUED
 |--------|-----|------|
 | GET | `/api/vehicle/next/` | SCANNED 이벤트의 좌표를 **한 번** 수신 → AMR2가 Nav2로 자율 경로 계획. null이면 복귀 |
 | POST | `/api/vehicle/verify/` | 번호판 매칭 결과 전송 (match=true → WARNING_ISSUED, match=false → 이벤트 삭제) |
+
+### bridge_ocr.py (OCR 노드 ↔ 서버 중계)
+| Method | URL | 설명 |
+|--------|-----|------|
+| GET | `/api/parking/by-vehicle/<vehicle_id>/` | vehicle_id → parking_events.id(DB PK) 변환 조회 |
+| GET | `/api/vehicle/<db_id>/` | AMR1이 저장한 plate_number 조회 (AMR2 매칭용) |
+
+> **vehicle_id → DB id 변환이 필요한 이유**
+> OCR 노드(plate_ocr_node.py)는 웹캠이 부여한 `vehicle_id`로 차량을 식별하지만, Django API는 `parking_events.id`(DB PK)를 기준으로 동작한다. bridge_ocr.py가 중간에서 변환을 담당한다.
+
+### bridge_ocr.py ROS2 토픽
+| 토픽 | 방향 | 타입 | 설명 |
+|------|------|------|------|
+| `regist_car` | 구독 | String | AMR1 번호판 등록 요청 → `POST /api/vehicle/` |
+| `request_car` | 구독 | String | AMR2 번호판 조회 요청 → `GET /api/vehicle/<id>/` |
+| `servertoocr` | 발행 | String | 서버 조회 결과(plate_number) → OCR 노드로 전달 |
+| `match_result` | 구독 | Bool | 일반 구역 매칭 결과 (False → 이벤트 삭제) |
+| `match_result_id` | 구독 | String | 일반 구역 매칭 성공 + 이미지 → `WARNING_ISSUED` |
+| `disabled` | 구독 | String | 장애인 차량 조회 요청 (번호판 텍스트) |
+| `disabled_result` | 발행 | Bool | 장애인 차량 조회 결과 → OCR 노드로 전달 |
+| `disabled_result_id` | 구독 | String | 장애인 구역 불법주차 → `WARNING_ISSUED` |
+| `firecar_result_id` | 구독 | String | 소방차 구역 불법주차 → `WARNING_ISSUED` |
+| `firecar_result` | 구독 | Bool | True=실제 소방차(정상주차) → 이벤트 삭제 / False=스킵(`firecar_result_id`에서 처리) |
+| `/robot4/plate_id` | 구독 | String | AMR2 zone=4 수신 시 vehicle_id 저장 (`firecar_result` 처리 대비) |
 
 ### 모니터링
 | Method | URL | 설명 |
