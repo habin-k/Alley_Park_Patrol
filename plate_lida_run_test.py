@@ -80,11 +80,7 @@ class PlateLidarRunTestNode(Node):
         self.declare_parameter('settle_time_sec', 0.5)
         self.declare_parameter('inspect_pause_sec', 10.0)
 
-        # 직선 길이를 넘지 않는 범위에서 이 offset들을 순서대로 이동합니다.
-        # +는 로봇 전진, -는 로봇 후진입니다.
-        # 예: 0.20 -> 원점 기준 +20cm 위치, 0.35 -> +35cm 위치로 이동합니다.
-        # 테스트 관찰이 쉽도록 기본값은 뒤로 돌아오지 않고 전진 방향만 사용합니다.
-        self.declare_parameter('search_offsets_m', '0.60,1.00')
+        # 라이다로 측정한 차량면 길이를 기준으로 이동하되, 이 거리 이상은 가지 않습니다.
         self.declare_parameter('max_search_distance_m', 1.50)
 
         # 전진 중 정면 가까운 장애물이 있으면 멈추는 간단한 안전장치입니다.
@@ -131,9 +127,6 @@ class PlateLidarRunTestNode(Node):
         self.front_safety_distance = self.get_parameter('front_safety_distance_m').value
         self.wait_timeout = self.get_parameter('wait_timeout_sec').value
         self.log_period_sec = self.get_parameter('log_period_sec').value
-        self.search_offsets = self._parse_offsets(
-            self.get_parameter('search_offsets_m').value
-        )
 
         # 콜백에서 계속 갱신되는 최신 센서/상태값입니다.
         self.last_log_time = 0.0
@@ -200,37 +193,21 @@ class PlateLidarRunTestNode(Node):
 
         self._sleep_with_spin(self.settle_time)
 
-        target_distance = min(line['line_length'] * 2.0, self.max_search_distance)
-        offsets = [target_distance] #<-만약에 후진하고 싶으면 여기에 - 부호 넣으면 됨 
-        
-        if not offsets:
-            self.get_logger().error("이동 가능한 search offset이 없습니다.")
-            self._stop_robot()
-            return False
+        target_distance = min(line['line_length'], self.max_search_distance)
+        target_offset = -target_distance  # +면 전진, -면 후진입니다.
 
         self.get_logger().info(
             f"2단계: 평행 방향으로 전후 이동 테스트 "
             f"(line_length={line['line_length']:.2f} m, "
-            f"target={target_distance:.2f} m, offsets={offsets})"
+            f"target_offset={target_offset:+.2f} m)"
         )
 
-        # current_offset은 "처음 평행 정렬을 끝낸 위치"를 0m로 봤을 때의 현재 상대 위치입니다.
-        current_offset = 0.0
-        for target_offset in offsets:
-            # target_offset은 원점 기준 목표 위치이고, delta는 이번에 실제로 움직일 거리입니다.
-            delta = target_offset - current_offset
-            if abs(delta) <= self.distance_tolerance:
-                continue
-
-            self.get_logger().info(
-                f"offset {current_offset:.2f} -> {target_offset:.2f} m 이동 "
-                f"(delta={delta:+.2f} m)"
-            )
-            if not self._move_straight(delta):
+        if abs(target_offset) > self.distance_tolerance:
+            self.get_logger().info(f"{target_offset:+.2f} m 이동")
+            if not self._move_straight(target_offset):
                 self._stop_robot()
                 return False
 
-            current_offset = target_offset
             self._stop_robot()
             self.get_logger().info(
                 f"이 위치에서 teleop으로 차량 좌표 방향을 바라본 뒤 YOLO 확인하면 됩니다. "
@@ -287,7 +264,6 @@ class PlateLidarRunTestNode(Node):
             'line_angle': line_angle,
             'heading_error': heading_error,
             'line_length': line_length,
-            'selected_distance': selected_distance,
         }
 
         self._publish_markers(
@@ -638,16 +614,6 @@ class PlateLidarRunTestNode(Node):
         point.y = float(xy[1])
         point.z = z
         return point
-
-    def _parse_offsets(self, offsets_text):
-        """'0.10,0.20,-0.10' 형태의 파라미터 문자열을 float 리스트로 바꿉니다."""
-        offsets = []
-        for raw_value in str(offsets_text).split(','):
-            raw_value = raw_value.strip()
-            if not raw_value:
-                continue
-            offsets.append(float(raw_value))
-        return offsets
 
     def _stop_robot(self):
         """cmd_vel 0을 한 번 발행해서 로봇을 정지시킵니다."""
