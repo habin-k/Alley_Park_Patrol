@@ -9,7 +9,7 @@ from .api_views import (
 from .monitor_views import (
     api_login, api_logout,
     summary, event_list, disabled_list, disabled_register,
-    disabled_delete, plate_match_result,
+    disabled_delete,
     webcam_frame_upload, webcam_frame_get, webcam_image, webcam_stream,
     webcam2_frame_upload, webcam2_frame_get, webcam2_stream,
     amr1_frame_upload, amr1_frame_get,
@@ -49,7 +49,6 @@ urlpatterns = [
     path('api/monitor/disabled/', disabled_list, name='api_monitor_disabled_list'),
     path('api/monitor/disabled/register/', disabled_register, name='api_monitor_disabled_register'),
     path('api/monitor/disabled/<str:plate_number>/', disabled_delete, name='api_monitor_disabled_delete'),
-    path('api/monitor/plate-match/', plate_match_result, name='api_monitor_plate_match'),
     path('api/webcam1/frame/', webcam_frame_upload, name='api_webcam_upload'),
     path('api/webcam1/frame/latest/', webcam_frame_get, name='api_webcam_get'),
     path('api/webcam1/image/', webcam_image, name='api_webcam_image'),

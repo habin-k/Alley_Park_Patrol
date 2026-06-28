@@ -183,35 +183,6 @@ def disabled_delete(request, plate_number):
         return Response({'error': '등록되지 않은 번호판입니다.'}, status=status.HTTP_404_NOT_FOUND)
 
 
-# ── 4. 번호판 비교 결과 (AMR1 vs AMR2) ───────────────────────
-
-@extend_schema(
-    summary="[모니터] AMR1/2 번호판 비교 결과",
-    description="VERIFIED 이상 상태의 이벤트에서 AMR1(vehicle_info.plate_number)과 AMR2 매칭 결과를 반환.",
-)
-@api_view(['GET'])
-def plate_match_result(request):
-    events = ParkingEvent.objects.filter(
-        status='WARNING_ISSUED'
-    ).order_by('-created_at')
-
-    data = []
-    for event in events:
-        try:
-            vi = event.vehicle_info
-            data.append({
-                'event_id':     event.id,
-                'amr1_plate':   vi.plate_number,
-                'match_result': 'MATCHED',
-                'status':       event.status,
-                'created_at':   event.created_at,
-            })
-        except VehicleInfo.DoesNotExist:
-            pass
-
-    return Response(data)
-
-
 # ── 6. 웹캠 프레임 전송 / 수신 ───────────────────────────────
 
 @extend_schema(
