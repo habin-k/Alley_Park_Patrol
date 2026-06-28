@@ -34,14 +34,38 @@ class PlateLidarRunWithYoloTestNode(Node):
     def __init__(self):
         super().__init__('plate_lidar_run_with_yolo_test_node')
 
-        # robot4 기본 토픽입니다.
+        # -------------------------
+        # ROS 토픽 파라미터
+        # -------------------------
+        # scan_topic:
+        #   라이다 LaserScan 입력입니다. 차량 옆면 직선 추출과 전방 안전 정지에 사용합니다.
+        # odom_topic:
+        #   cmd_vel로 회전/이동할 때 실제 회전량과 이동량을 확인하는 기준입니다.
+        # amcl_pose_topic:
+        #   map 좌표 target_x/y 방향을 바라보기 위한 현재 robot pose입니다.
+        # cmd_vel_topic:
+        #   로봇을 직접 움직이는 속도 명령 출력입니다.
+        # camera_topic:
+        #   YOLO 입력으로 사용할 OAK-D compressed image입니다.
         self.declare_parameter('scan_topic', '/robot4/scan')
         self.declare_parameter('odom_topic', '/robot4/odom')
         self.declare_parameter('amcl_pose_topic', '/robot4/amcl_pose')
         self.declare_parameter('cmd_vel_topic', '/robot4/cmd_vel')
         self.declare_parameter('camera_topic', '/robot4/oakd/rgb/image_raw/compressed')
 
-        # YOLO 설정입니다.
+        # -------------------------
+        # YOLO 설정
+        # -------------------------
+        # confidence_threshold:
+        #   번호판으로 인정할 최소 confidence입니다.
+        # plate_class_id:
+        #   YOLO 모델에서 Plate class 번호입니다.
+        # yolo_min_period_sec:
+        #   YOLO 추론 주기를 제한합니다. 너무 자주 돌리면 주행 제어가 버벅일 수 있습니다.
+        # initial_yolo_check_sec:
+        #   라이다 보정 전에 현재 자세에서 번호판을 확인하는 시간입니다.
+        # final_yolo_check_sec:
+        #   라이다 보정 및 target 방향 회전 후 번호판을 확인하는 시간입니다.
         self.declare_parameter(
             'model_path',
             '/home/rokey/rokey_ws/src/final_pjt/final_pjt/semi_allimages_v5n.pt'
@@ -53,29 +77,47 @@ class PlateLidarRunWithYoloTestNode(Node):
         self.declare_parameter('initial_yolo_check_sec', 1.5)
         self.declare_parameter('final_yolo_check_sec', 3.0)
 
+        # -------------------------
+        # 차량 좌표 바라보기 설정
+        # -------------------------
         # target_x/y는 map 좌표입니다.
-        # use_target_pose=True로 실행하면 이동 후 해당 좌표 방향을 바라봅니다.
+        # use_target_pose=True로 실행하면 라이다 보정 이동 후 target_x/y 방향을 바라봅니다.
+        # 실제 통합 코드에서는 AMR 미션 큐에서 받은 차량 좌표가 이 값으로 들어오면 됩니다.
         self.declare_parameter('use_target_pose', False)
         self.declare_parameter('target_x', 0.0)
         self.declare_parameter('target_y', 0.0)
 
         # robot4에서 OAK-D 카메라 정면은 /scan 각도 기준 대략 -90도였습니다.
+        # line_angle - camera_forward_angle_deg 값이 "차량 옆면과 카메라 정면의 평행 오차"가 됩니다.
         self.declare_parameter('camera_forward_angle_deg', -90.0)
 
         # 카메라 정면 기준 라이다 ROI입니다.
+        # OAK-D RGB HFOV가 약 69도라서 -90 ± 35도 근처로 잡은 값입니다.
         self.declare_parameter('roi_angle_min_deg', -125.0)
         self.declare_parameter('roi_angle_max_deg', -55.0)
         self.declare_parameter('roi_range_min_m', 0.15)
         self.declare_parameter('roi_range_max_m', 0.70)
 
         # 라이다 직선 추출 파라미터입니다.
+        # cluster_distance_threshold_m:
+        #   인접한 라이다 점 사이 거리가 이 값보다 크면 다른 물체로 분리합니다.
+        # ransac_distance_threshold_m:
+        #   직선에서 이 거리 이내인 점만 inlier로 인정합니다.
         self.declare_parameter('min_points', 12)
         self.declare_parameter('cluster_distance_threshold_m', 0.12)
         self.declare_parameter('ransac_iterations', 80)
         self.declare_parameter('ransac_distance_threshold_m', 0.035)
         self.declare_parameter('min_line_length_m', 0.15)
 
-        # cmd_vel + odom 이동 파라미터입니다.
+        # -------------------------
+        # cmd_vel + odom 이동 파라미터
+        # -------------------------
+        # rotation_sign:
+        #   실제 로봇 테스트에서 회전 방향이 반대로 나오면 -1.0으로 바꿉니다.
+        # move_direction:
+        #   +1.0이면 평행 정렬 후 전진, -1.0이면 후진입니다.
+        # line_length_multiplier:
+        #   라이다 초록 선 길이에 곱할 배율입니다. 2.0이면 초록 선 길이의 2배 이동입니다.
         self.declare_parameter('rotation_sign', 1.0)
         self.declare_parameter('angular_speed_rad_s', 0.25)
         self.declare_parameter('linear_speed_m_s', 0.05)
@@ -152,21 +194,27 @@ class PlateLidarRunWithYoloTestNode(Node):
         self.bridge = CvBridge()
         self.window_name = 'plate_lidar_yolo_view'
 
+        # -------------------------
+        # 최신 센서/로봇 상태
+        # -------------------------
         self.last_log_time = 0.0
-        self.latest_scan = None
-        self.latest_line = None
-        self.current_odom = None
-        self.current_yaw = None
-        self.current_map_x = None
-        self.current_map_y = None
-        self.current_map_yaw = None
+        self.latest_scan = None        # 최신 LaserScan. 라이다 직선 추출과 안전 정지에 사용합니다.
+        self.latest_line = None        # 최신 차량면 직선 정보. run_sequence()가 복사해서 사용합니다.
+        self.current_odom = None       # 최신 odom. cmd_vel 이동/회전량 확인에 사용합니다.
+        self.current_yaw = None        # odom 기준 yaw입니다.
+        self.current_map_x = None      # AMCL map x입니다. target 바라보기용입니다.
+        self.current_map_y = None      # AMCL map y입니다.
+        self.current_map_yaw = None    # AMCL map yaw입니다.
 
+        # -------------------------
+        # YOLO 탐지 상태
+        # -------------------------
         self.last_yolo_time = 0.0
-        self.latest_plate_detected = False
-        self.latest_plate_stamp = 0.0
-        self.latest_plate_confidence = 0.0
-        self.accept_plate_detection = False
-        self.accepted_plate_detected = False
+        self.latest_plate_detected = False      # 마지막 YOLO 추론에서 번호판이 보였는지
+        self.latest_plate_stamp = 0.0           # 마지막 번호판 탐지 시각
+        self.latest_plate_confidence = 0.0      # 마지막 번호판 confidence
+        self.accept_plate_detection = False     # True일 때만 번호판 탐지를 성공으로 인정합니다.
+        self.accepted_plate_detected = False    # 확인 구간 중 번호판 탐지가 성공했는지
 
         self.scan_sub = self.create_subscription(
             LaserScan,
@@ -204,11 +252,16 @@ class PlateLidarRunWithYoloTestNode(Node):
         self.get_logger().info(f"YOLO class names: {self.class_names}")
 
     def run_sequence(self):
-        """YOLO 초기 확인 -> 라이다 보정 -> 목표 좌표 바라보기 -> YOLO 최종 확인."""
+        """YOLO 초기 확인 -> 라이다 보정 -> 목표 좌표 바라보기 -> YOLO 최종 확인.
+
+        이 함수는 테스트용으로 한 번의 recovery 흐름을 끝까지 실행합니다.
+        실제 미션 노드에 합칠 때는 이 blocking 구조를 timer/state 방식으로 바꾸는 편이 좋습니다.
+        """
         if not self._wait_for_ready():
             self._stop_robot()
             return False
 
+        # 1. 이미 번호판이 보이는 상황이면 라이다 보정 없이 바로 성공 처리합니다.
         if self.initial_yolo_check_sec > 0.0:
             if self._wait_for_plate_detection(
                 self.initial_yolo_check_sec,
@@ -217,6 +270,8 @@ class PlateLidarRunWithYoloTestNode(Node):
                 self.get_logger().info("초기 자세에서 번호판을 탐지했습니다.")
                 return True
 
+        # 2. 시작 시점의 라이다 직선 정보를 고정해서 사용합니다.
+        # 회전 중 latest_line은 계속 갱신되지만, 목표 회전각은 시작 시점 기준으로 잡습니다.
         line = dict(self.latest_line)
         if line['line_length'] < self.min_line_length:
             self.get_logger().error(
@@ -225,6 +280,7 @@ class PlateLidarRunWithYoloTestNode(Node):
             self._stop_robot()
             return False
 
+        # 3. 차량면 직선과 카메라 정면 방향이 평행해지도록 회전합니다.
         rotate_angle = self.rotation_sign * line['heading_error']
         self.get_logger().info(
             f"1단계: 차량면과 평행 정렬 "
@@ -238,6 +294,8 @@ class PlateLidarRunWithYoloTestNode(Node):
 
         self._sleep_with_spin(self.settle_time)
 
+        # 4. 라이다 초록 선 길이를 기준으로 전진/후진 이동 거리를 정합니다.
+        # move_direction이 -1이면 후진, +1이면 전진입니다.
         target_distance = min(
             line['line_length'] * self.line_length_multiplier,
             self.max_search_distance
@@ -258,6 +316,8 @@ class PlateLidarRunWithYoloTestNode(Node):
         self._stop_robot()
         self._sleep_with_spin(self.settle_time)
 
+        # 5. 차량 map 좌표를 알고 있으면, 이동 후 그 좌표를 바라보도록 회전합니다.
+        # 이 단계 뒤에만 YOLO 성공 판정을 다시 허용하므로 다른 차량 오탐을 줄일 수 있습니다.
         if self.use_target_pose:
             self.get_logger().info(
                 f"3단계: 차량 좌표 방향 바라보기 "
@@ -272,6 +332,7 @@ class PlateLidarRunWithYoloTestNode(Node):
                 "use_target_pose=False 입니다. 차량 좌표 방향 회전 없이 최종 YOLO 확인을 진행합니다."
             )
 
+        # 6. 최종 자세에서만 YOLO 탐지를 성공으로 인정합니다.
         if self.final_yolo_check_sec > 0.0:
             if self._wait_for_plate_detection(
                 self.final_yolo_check_sec,
@@ -287,6 +348,8 @@ class PlateLidarRunWithYoloTestNode(Node):
     def image_callback(self, msg):
         """카메라 compressed image를 받아 YOLO를 돌리고 화면을 표시합니다."""
         now = time.monotonic()
+
+        # YOLO는 상대적으로 무겁기 때문에 최소 추론 간격을 둡니다.
         if now - self.last_yolo_time < self.yolo_min_period:
             return
         self.last_yolo_time = now
@@ -303,6 +366,7 @@ class PlateLidarRunWithYoloTestNode(Node):
             self.latest_plate_stamp = now
             self.latest_plate_confidence = best_confidence
 
+            # 이동 중에는 화면 표시만 하고, 확인 구간에서만 성공 판정을 켭니다.
             if self.accept_plate_detection:
                 self.accepted_plate_detected = True
                 self._stop_robot()
@@ -323,6 +387,8 @@ class PlateLidarRunWithYoloTestNode(Node):
             return
 
         clusters = self._cluster_points(points)
+
+        # 차량 좌표 근처에 도착했다는 가정 아래, 가장 가까운 cluster를 차량면 후보로 사용합니다.
         selected_cluster = self._select_nearest_cluster(clusters)
 
         if selected_cluster is None:
@@ -341,6 +407,9 @@ class PlateLidarRunWithYoloTestNode(Node):
             return
 
         point_on_line, direction, inliers = line
+
+        # line_angle은 라이다 좌표계에서의 직선 방향입니다.
+        # heading_error는 그 직선과 카메라 정면 방향의 차이입니다.
         line_angle = math.atan2(direction[1], direction[0])
         heading_error = self._normalize_parallel_angle(
             line_angle - self.camera_forward_angle
@@ -403,6 +472,9 @@ class PlateLidarRunWithYoloTestNode(Node):
                     and self.current_map_yaw is not None
                 )
             )
+
+            # 카메라 이미지 자체는 YOLO callback이 들어오면서 처리됩니다.
+            # 여기서는 라이다/odom/amcl처럼 recovery 동작에 필수인 상태만 확인합니다.
             if line_is_fresh and odom_ready and target_ready:
                 return True
 
@@ -419,6 +491,9 @@ class PlateLidarRunWithYoloTestNode(Node):
 
         while rclpy.ok() and time.monotonic() - start < duration:
             rclpy.spin_once(self, timeout_sec=0.05)
+
+            # 확인 시작 이후에 발생한 번호판 탐지만 성공으로 인정합니다.
+            # 이전 프레임의 오래된 detection이 남아서 바로 성공 처리되는 것을 막기 위한 조건입니다.
             fresh_detection = (
                 self.latest_plate_detected
                 and self.latest_plate_stamp >= start
@@ -449,6 +524,9 @@ class PlateLidarRunWithYoloTestNode(Node):
             return True
 
         target_yaw = math.atan2(dy, dx)
+
+        # AMCL 기준 현재 yaw와 target 방향 yaw 차이만큼 제자리 회전합니다.
+        # 실제 회전량 확인은 _rotate_relative() 안에서 odom yaw로 합니다.
         rotate_angle = self._normalize_angle(target_yaw - self.current_map_yaw)
         self.get_logger().info(
             f"target_yaw={math.degrees(target_yaw):.1f} deg, "
@@ -470,6 +548,8 @@ class PlateLidarRunWithYoloTestNode(Node):
 
         while rclpy.ok():
             rclpy.spin_once(self, timeout_sec=0.05)
+
+            # odom yaw가 시작 yaw에서 얼마나 변했는지로 회전 완료 여부를 판단합니다.
             rotated = self._normalize_angle(self.current_yaw - start_yaw)
             remaining = abs(target_angle) - abs(rotated)
 
@@ -503,12 +583,16 @@ class PlateLidarRunWithYoloTestNode(Node):
         while rclpy.ok():
             rclpy.spin_once(self, timeout_sec=0.05)
 
+            # 현재는 전진할 때만 정면 safety stop을 적용합니다.
+            # 후진 safety가 필요하면 뒤쪽 ROI를 따로 추가해야 합니다.
             if direction > 0.0 and self._front_obstacle_too_close():
                 self.get_logger().error("전방 장애물이 가까워 이동을 중단합니다.")
                 self._stop_robot()
                 return False
 
             pose = self.current_odom.pose.pose.position
+
+            # odom 시작점과 현재점 사이의 직선 거리로 이동량을 계산합니다.
             moved = math.hypot(pose.x - start_x, pose.y - start_y)
             remaining = abs(distance) - moved
 
@@ -541,6 +625,7 @@ class PlateLidarRunWithYoloTestNode(Node):
             if angle < self.front_safety_min or angle > self.front_safety_max:
                 continue
 
+            # safety ROI 안에서 front_safety_distance보다 가까운 점이 있으면 정지합니다.
             if self.roi_range_min <= scan_range <= self.front_safety_distance:
                 return True
 
@@ -556,10 +641,14 @@ class PlateLidarRunWithYoloTestNode(Node):
         for result in results:
             for box in result.boxes:
                 confidence = float(box.conf[0])
+
+                # confidence가 낮은 탐지는 번호판으로 인정하지 않습니다.
                 if confidence < self.confidence_threshold:
                     continue
 
                 cls = int(box.cls[0])
+
+                # 현재 모델 기준 Plate class만 성공 후보로 사용합니다.
                 if cls != self.plate_class_id:
                     continue
 
@@ -587,6 +676,7 @@ class PlateLidarRunWithYoloTestNode(Node):
             status_color = (0, 0, 255)
 
         if not self.accept_plate_detection:
+            # 이동 중 또는 성공 판정이 꺼진 구간에서는 화면 표시만 한다는 표시입니다.
             status_text += ' / display only'
 
         cv2.putText(
@@ -601,6 +691,7 @@ class PlateLidarRunWithYoloTestNode(Node):
         return plate_detected, best_confidence, annotated
 
     def _load_yolo_model(self, model_path):
+        """YOLO 모델 파일을 확장자에 맞게 로드합니다."""
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"모델 파일을 찾을 수 없습니다: {model_path}")
 
@@ -612,6 +703,7 @@ class PlateLidarRunWithYoloTestNode(Node):
         raise ValueError(f"지원하지 않는 모델 형식입니다: {suffix}")
 
     def _get_class_label(self, cls):
+        """YOLO class id를 화면에 표시할 문자열로 변환합니다."""
         if isinstance(self.class_names, dict):
             return self.class_names.get(cls, f'class_{cls}')
         if 0 <= cls < len(self.class_names):
@@ -619,6 +711,7 @@ class PlateLidarRunWithYoloTestNode(Node):
         return f'class_{cls}'
 
     def _scan_to_roi_points(self, msg):
+        """LaserScan ranges 중 ROI 각도/거리 안의 점만 2D 좌표로 변환합니다."""
         points = []
         for i, scan_range in enumerate(msg.ranges):
             if not math.isfinite(scan_range):
@@ -637,6 +730,7 @@ class PlateLidarRunWithYoloTestNode(Node):
         return np.array(points, dtype=np.float64)
 
     def _cluster_points(self, points):
+        """ROI 점들을 거리 연속성 기준으로 cluster 단위로 나눕니다."""
         clusters = []
         current_cluster = [points[0]]
 
@@ -657,15 +751,18 @@ class PlateLidarRunWithYoloTestNode(Node):
         return clusters
 
     def _select_nearest_cluster(self, clusters):
+        """여러 cluster 중 로봇과 가장 가까운 cluster를 차량면 후보로 선택합니다."""
         if not clusters:
             return None
         return min(clusters, key=self._cluster_min_distance)
 
     def _cluster_min_distance(self, cluster):
+        """cluster 내부 점들 중 로봇 원점에서 가장 가까운 거리입니다."""
         distances = np.linalg.norm(cluster, axis=1)
         return float(np.min(distances))
 
     def _fit_line_ransac(self, points):
+        """RANSAC으로 이상점을 버리고 직선 후보를 찾습니다."""
         best_inliers = None
         if len(points) < 2:
             return None
@@ -693,6 +790,7 @@ class PlateLidarRunWithYoloTestNode(Node):
         return self._refine_line_with_pca(best_inliers)
 
     def _refine_line_with_pca(self, points):
+        """RANSAC inlier를 PCA로 다시 피팅해 최종 직선 방향을 계산합니다."""
         center = np.mean(points, axis=0)
         centered = points - center
         _, _, vh = np.linalg.svd(centered, full_matrices=False)
@@ -710,19 +808,23 @@ class PlateLidarRunWithYoloTestNode(Node):
         return center, direction, inliers
 
     def _point_line_distances(self, points, point_on_line, direction):
+        """점들과 직선 사이의 수직 거리를 계산합니다."""
         relative = points - point_on_line
         return np.abs(relative[:, 0] * direction[1] - relative[:, 1] * direction[0])
 
     def _line_length(self, point_on_line, direction, points):
+        """직선 방향으로 점들을 투영해 라이다에 보이는 차량면 길이를 계산합니다."""
         projections = (points - point_on_line) @ direction
         return float(np.max(projections) - np.min(projections))
 
     def _yaw_from_quaternion(self, q):
+        """quaternion orientation에서 yaw만 추출합니다."""
         siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         return math.atan2(siny_cosp, cosy_cosp)
 
     def _normalize_parallel_angle(self, angle):
+        """직선 방향 오차를 -90~90도 범위로 정규화합니다."""
         while angle > math.pi / 2.0:
             angle -= math.pi
         while angle < -math.pi / 2.0:
@@ -730,6 +832,7 @@ class PlateLidarRunWithYoloTestNode(Node):
         return angle
 
     def _normalize_angle(self, angle):
+        """일반 yaw 오차를 -180~180도 범위로 정규화합니다."""
         while angle > math.pi:
             angle -= 2.0 * math.pi
         while angle < -math.pi:
@@ -737,9 +840,12 @@ class PlateLidarRunWithYoloTestNode(Node):
         return angle
 
     def _move_direction_sign(self):
+        """move_direction 파라미터를 +1 또는 -1 부호로 변환합니다."""
         return 1.0 if self.move_direction >= 0.0 else -1.0
 
     def _publish_markers(self, header, roi_points, selected_cluster, point_on_line, direction, inliers):
+        """RViz 확인용 Marker를 발행합니다."""
+        # 회색: ROI 전체 점
         roi_marker = self._make_points_marker(
             header=header,
             marker_id=0,
@@ -762,6 +868,7 @@ class PlateLidarRunWithYoloTestNode(Node):
             scale=0.03
         )
 
+        # 초록: 최종 추정 직선입니다. 점보다 잘 보이도록 z를 살짝 올립니다.
         line_marker = Marker()
         line_marker.header = header
         line_marker.ns = 'plate_lidar_line'
@@ -787,6 +894,7 @@ class PlateLidarRunWithYoloTestNode(Node):
         self.marker_pub.publish(line_marker)
 
     def _make_points_marker(self, header, marker_id, points, color, scale):
+        """numpy 점 배열을 RViz POINTS Marker로 변환합니다."""
         marker = Marker()
         marker.header = header
         marker.ns = 'plate_lidar_line'
@@ -804,6 +912,7 @@ class PlateLidarRunWithYoloTestNode(Node):
         return marker
 
     def _publish_delete_markers(self, header):
+        """유효한 직선을 못 찾았을 때 RViz에 남은 이전 marker를 지웁니다."""
         for marker_id in [0, 1, 2, 3]:
             marker = Marker()
             marker.header = header
@@ -813,6 +922,7 @@ class PlateLidarRunWithYoloTestNode(Node):
             self.marker_pub.publish(marker)
 
     def _to_point(self, xy, z=0.0):
+        """numpy xy 좌표를 visualization_msgs/Point로 변환합니다."""
         point = Point()
         point.x = float(xy[0])
         point.y = float(xy[1])
@@ -820,14 +930,17 @@ class PlateLidarRunWithYoloTestNode(Node):
         return point
 
     def _stop_robot(self):
+        """cmd_vel 0을 발행해 로봇을 정지시킵니다."""
         self.cmd_pub.publish(Twist())
 
     def _sleep_with_spin(self, duration):
+        """대기 중에도 scan/odom/image callback이 계속 처리되도록 spin_once를 반복합니다."""
         end_time = time.monotonic() + duration
         while rclpy.ok() and time.monotonic() < end_time:
             rclpy.spin_once(self, timeout_sec=0.05)
 
     def _log_periodically(self, text):
+        """라이다 로그가 너무 많이 찍히지 않도록 주기 제한을 둡니다."""
         now = time.monotonic()
         if now - self.last_log_time < self.log_period_sec:
             return
@@ -835,6 +948,7 @@ class PlateLidarRunWithYoloTestNode(Node):
         self.get_logger().info(text)
 
     def destroy_node(self):
+        """노드 종료 시 OpenCV 창을 닫습니다."""
         if self.show_yolo_window:
             cv2.destroyAllWindows()
         super().destroy_node()
