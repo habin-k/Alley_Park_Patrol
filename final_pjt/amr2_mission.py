@@ -285,8 +285,10 @@ class Amr2Mission(Node):
                     continue
 
                 point = det.get('map', det)
+                target_id = det.get(
+                    'event_id', det.get('id', f'{camera_id}_{index}'))
                 targets.append({
-                    'id': str(det.get('id', f'{camera_id}_{index}')),
+                    'id': str(target_id),
                     'zone': zone,
                     'x': point['x'],
                     'y': point['y'],
