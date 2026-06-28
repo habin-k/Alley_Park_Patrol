@@ -11,34 +11,34 @@
 - **그대로인 차량** → 아무것도 안 함
 
 ### 2단계 - AMR1 (Police 1) - 현장 판별 + 번호판 OCR
-AMR1이 서버에서 `observation_x/y` 좌표를 **한 번** 수신한 뒤, Nav2로 **자율적으로 경로를 계획하여** 이동한다. 서버는 좌표를 제공할 뿐 경로 안내를 하지 않는다. 현장 도착 후 두 가지 방법으로 `zone_type`을 판별한다:
+AMR1이 **웹캠 노드로부터 ROS2 토픽으로** `observation_x/y` 좌표와 `vehicle_id`를 직접 수신한 뒤, Nav2로 **자율적으로 경로를 계획하여** 이동한다. **서버와 직접 통신하지 않는다.** 현장 도착 후 두 가지 방법으로 `zone_type`을 판별한다:
 
 - **주황색 주차선 감지 시** → `zone_type=NORMAL` → 정상 주차로 판단하여 **스킵**
-- **주황색 주차선 없음** → AMR 팀원이 맵에 사전 정의한 구역 좌표와 로봇의 현재 위치를 비교하여 가장 가까운 구역(`COMPACT` / `DISABLED` / `FIRE` / `EV` / `Not`)을 판별
+- **주황색 주차선 없음** → AMR 팀원이 맵에 사전 정의한 구역 좌표와 로봇의 현재 위치를 비교하여 가장 가까운 구역(`DISABLED` / `FIRE` / `Not`)을 판별
 
-불법 주차로 판단되면 OCR로 번호판 인식 후 `vehicle_info` 테이블에 저장(`plate_number`, `ocr_image`: base64 인코딩 이미지)하고 `status=SCANNED`으로 업데이트한다. `disabled_vehicle`에 등록된 장애인 차량은 스킵한다. **zone_type/vehicle_type은 DB에 저장하지 않으며 AMR 내부에서만 사용한다.**
+불법 주차로 판단되면 OCR로 번호판 인식 후 `regist_car` ROS2 토픽으로 발행한다. `bridge_ocr.py`가 이를 수신하여 서버 `POST /api/vehicle/`를 호출하고, `vehicle_info` 테이블에 저장(`plate_number`, `ocr_image`)하며 `status=SCANNED`으로 업데이트한다. `disabled_vehicle`에 등록된 장애인 차량은 스킵한다. **zone_type은 DB에 저장하지 않으며 AMR 내부에서만 사용한다.**
 
 ### 3단계 - AMR2 (Police 2) - 번호판 검증 + 경보
-AMR2가 서버에서 `vehicle_id`와 `observation_x/y` 좌표를 **한 번** 수신한 뒤, Nav2로 **자율적으로 경로를 계획하여** 이동한다. 서버는 좌표를 제공할 뿐 경로 안내를 하지 않는다. 좌표가 없으면 제자리로 복귀한다.
+AMR2가 **웹캠 노드로부터 ROS2 토픽으로** `observation_x/y` 좌표와 `vehicle_id`를 직접 수신한 뒤, Nav2로 **자율적으로 경로를 계획하여** 이동한다. **서버와 직접 통신하지 않으며**, 모든 서버 통신은 `bridge_ocr.py`가 담당한다. 좌표가 없으면 제자리로 복귀한다.
 
 도착 후 zone_type에 따라 처리 방식이 다르다. **주차 구역 정보는 DB에 저장되지 않으며, AMR 내부에 사전 정의되어 있다.**
 
 #### DISABLED (장애인 전용) 구역
 1. YOLO + OCR로 번호판 텍스트 추출
-2. 서버에 `plate_number` + `event_id` 전송
-3. 서버가 `disabled_vehicle` 테이블 조회 후 `True` / `False` 반환
-   - `True` (장애인 차량, 정상) → 서버가 해당 `event_id` 삭제
-   - `False` (불법) → AMR2가 서버에 `event_id` + base64 인코딩 이미지 전송 → `status=WARNING_ISSUED`
+2. `disabled` ROS2 토픽으로 번호판 발행 → `bridge_ocr.py`가 `GET /api/disabled/<plate>/` 호출
+3. `disabled_result` 토픽(Bool)으로 결과 수신
+   - `True` (장애인 차량, 정상) → 스킵
+   - `False` (불법) → `disabled_result_id` 토픽으로 `vehicle_id` + base64 이미지 발행 → `bridge_ocr.py`가 `POST /api/vehicle/verify/ match=true` 호출 → `status=WARNING_ISSUED`
 
 #### FIRE (소방차 전용) 구역
 - 소방차는 전용 번호판을 사용하므로 번호판으로 소방차 여부를 판별한다
 1. YOLO + OCR로 번호판 텍스트 추출
-2. 서버로부터 AMR1이 저장한 `plate_number`를 수신하여 plate-match 수행
-   - `true` (일치, 실제 소방차) → 정상 주차 → 서버에 `event_id` 전송 → 서버가 해당 event 삭제
-   - `false` (불일치, 소방차 아님) → 불법 주차 → 서버에 `event_id` + base64 인코딩 이미지 전송 → `status=WARNING_ISSUED`
+2. `request_car` 토픽으로 `vehicle_id` 발행 → `bridge_ocr.py`가 서버에서 AMR1이 저장한 `plate_number` 조회 → `servertoocr` 토픽으로 수신하여 plate-match 수행
+   - 일치 (실제 소방차) → `firecar_result(True)` 토픽 발행 → `bridge_ocr.py`가 `POST /api/vehicle/verify/ match=false` 호출 → 이벤트 삭제
+   - 불일치 (소방차 아님) → `firecar_result_id` 토픽으로 `vehicle_id` + base64 이미지 발행 → `bridge_ocr.py`가 `POST /api/vehicle/verify/ match=true` 호출 → `status=WARNING_ISSUED`
 
-#### 그 외 구역 (COMPACT / EV / Not)
-YOLO로 번호판 위치를 찾고 OCR로 번호판 텍스트를 추출하여 DB에 저장된 `plate_number`와 비교한다. 일치하면 `event_id`를 서버에 전송 → `status=WARNING_ISSUED` + 경보 발령. 불일치하면 서버에 `match=false` + `event_id` 전송 → 해당 이벤트 삭제.
+#### 그 외 구역 (Not)
+YOLO로 번호판 위치를 찾고 OCR로 번호판 텍스트를 추출하여 DB에 저장된 `plate_number`와 비교한다. 일치하면 `match_result_id` 토픽 발행 → `bridge_ocr.py`가 `POST /api/vehicle/verify/ match=true` 호출 → `status=WARNING_ISSUED`. 불일치하면 `match_result(False)` 토픽 발행 → `bridge_ocr.py`가 `POST /api/vehicle/verify/ match=false` 호출 → 이벤트 삭제.
 
 ## status 흐름
 
@@ -52,8 +52,8 @@ DETECTED → SCANNED → WARNING_ISSUED
 | 노드 | 역할 | DB 작업 |
 |------|------|---------|
 | **웹캠 + YOLO** | 차량 탐지, bbox 좌표 계산 | `parking_events` INSERT (`status=DETECTED`) |
-| **AMR1 (Police 1)** | 주차선 색 판별 + 맵 좌표 비교로 구역 판단 (AMR 내부), 번호판 OCR | `vehicle_info` INSERT (`plate_number`, `ocr_image`) + `parking_events.status=SCANNED` |
-| **AMR2 (Police 2)** | YOLO로 번호판 탐지, OCR 텍스트 추출 후 구역별 검증, 경보 발령 | 정상 → 이벤트 삭제 / 불법 → `status=WARNING_ISSUED` + base64 이미지 수신 |
+| **AMR1 (Police 1)** | 웹캠 ROS2 토픽으로 좌표 수신 → Nav2 자율 이동 → 주차선 색 판별 + 맵 좌표 비교로 구역 판단 → 번호판 OCR 후 `regist_car` 토픽 발행. **서버 직접 통신 없음** | 직접 DB 접근 없음 (bridge_ocr 경유) |
+| **AMR2 (Police 2)** | 웹캠 ROS2 토픽으로 좌표 수신 → Nav2 자율 이동 → YOLO 번호판 탐지 + OCR → 구역별 검증 후 결과 토픽 발행. **서버 직접 통신 없음** | 직접 DB 접근 없음 (bridge_ocr 경유) |
 | **bridge_ocr.py** | OCR 노드(plate_ocr_node.py) ↔ Django 서버 중계. vehicle_id → DB id 변환 담당 | 직접 DB 접근 없음 (HTTP API 경유) |
 
 ## 주차 구역 종류 (zone_type)
@@ -61,10 +61,8 @@ DETECTED → SCANNED → WARNING_ISSUED
 | 값 | 판별 방법 | 설명 | 처리 |
 |----|----------|------|------|
 | `NORMAL` | 주황색 주차선 감지 | 정상 주차구역 | **스킵** |
-| `COMPACT` | 맵 좌표 비교 | 경차 전용 (AMR팀 사전 정의) | 불법 처리 |
 | `DISABLED` | 맵 좌표 비교 | 장애인 전용 (AMR팀 사전 정의) | `disabled_vehicle` 조회 후 판단 |
 | `FIRE` | 맵 좌표 비교 | 소방차 전용 (AMR팀 사전 정의) | 번호판 plate-match → 소방차면 정상, 아니면 불법 |
-| `EV` | 맵 좌표 비교 | 전기차 전용 (AMR팀 사전 정의) | 불법 처리 |
 | `Not` | 주차선 없음 | 주차 구역 아님 | 불법 처리 |
 
 > **zone_type 판별 로직 (AMR1 기준)**
@@ -99,9 +97,21 @@ DETECTED → SCANNED → WARNING_ISSUED
 | `status` | varchar | `DETECTED` / `SCANNED` / `WARNING_ISSUED` (인덱스, 기본값 DETECTED) |
 | `created_at` | timestamp | 최초 웹캠 감지 시각 (자동) |
 
-> **vehicle_id vs id 구분**
-> - `id`: Django 자동 생성 PK. DB 관계 유지용 (vehicle_info FK 등). 코드 내부에서 사용.
-> - `vehicle_id`: 웹캠이 부여하는 운영 식별자. AMR 간 차량 추적에 사용.
+> **⚠️ event_id 이름 혼용 주의 — 매우 헷갈리는 포인트**
+>
+> 시스템에서 `event_id`라는 이름이 두 가지 **전혀 다른 값**으로 사용된다.
+>
+> | 사용 위치 | `event_id`가 가리키는 값 | 실제 컬럼 |
+> |-----------|--------------------------|-----------|
+> | ROS2 통신 (AMR1 ↔ AMR2 ↔ OCR ↔ bridge_ocr) | 웹캠이 confidence 순으로 부여한 차량 식별자 | `parking_events.vehicle_id` |
+> | `vehicle_info` 테이블의 `event_id` 컬럼 | Django 자동 생성 DB PK | `parking_events.id` |
+>
+> **즉, ROS2 토픽에서 주고받는 `event_id`는 `parking_events.vehicle_id` 값이고, DB의 `vehicle_info.event_id`는 `parking_events.id`(PK) 값이다. 이름은 같지만 완전히 다른 값이다.**
+>
+> `bridge_ocr.py`가 이 변환을 담당한다: ROS2에서 `event_id`(=vehicle_id) 수신 → `GET /api/parking/by-vehicle/<vehicle_id>/`로 DB PK 조회 → DB PK를 사용해 API 호출.
+>
+> - `parking_events.id`: Django 자동 생성 PK. DB 관계 유지용 (vehicle_info FK 등). bridge_ocr가 변환 후 API 호출에 사용.
+> - `parking_events.vehicle_id`: 웹캠이 부여하는 운영 식별자. ROS2 통신에서 `event_id`라는 이름으로 사용.
 
 ### vehicle_info
 | 컬럼 | 타입 | 설명 |
