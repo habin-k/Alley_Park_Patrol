@@ -194,7 +194,7 @@ class PlateLidarRunTestNode(Node):
         self._sleep_with_spin(self.settle_time)
 
         target_distance = min(line['line_length'], self.max_search_distance)
-        target_offset = -target_distance  # +면 전진, -면 후진입니다.
+        target_offset = -target_distance   # +면 전진, -면 후진입니다.
 
         self.get_logger().info(
             f"2단계: 평행 방향으로 전후 이동 테스트 "
