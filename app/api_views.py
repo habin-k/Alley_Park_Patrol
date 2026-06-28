@@ -127,6 +127,31 @@ def disabled_check(request, plate_number):
 # ── AMR2 노드 ─────────────────────────────────────────────────
 
 @extend_schema(
+    summary="[OCR 브리지] vehicle_id로 parking_events 조회",
+    description="OCR 노드가 사용하는 vehicle_id(웹캠 confidence 순 번호)로 parking_events.id(DB PK)를 조회. 브리지가 API 호출 시 DB PK로 변환하는 데 사용.",
+)
+@api_view(['GET'])
+def parking_by_vehicle(request, vehicle_id):
+    event = ParkingEvent.objects.filter(vehicle_id=vehicle_id).order_by('-created_at').first()
+    if not event:
+        return Response({'error': 'not found'}, status=status.HTTP_404_NOT_FOUND)
+    return Response({'id': event.id, 'vehicle_id': event.vehicle_id, 'status': event.status})
+
+
+@extend_schema(
+    summary="[OCR 브리지] DB event_id로 번호판 조회",
+    description="parking_events.id(DB PK)로 vehicle_info의 plate_number 조회. 브리지가 servertoocr 토픽으로 재발행함.",
+)
+@api_view(['GET'])
+def vehicle_get(request, event_id):
+    try:
+        vi = VehicleInfo.objects.get(event_id=event_id)
+    except VehicleInfo.DoesNotExist:
+        return Response({'error': 'not found'}, status=status.HTTP_404_NOT_FOUND)
+    return Response({'event_id': event_id, 'plate_number': vi.plate_number})
+
+
+@extend_schema(
     summary="[AMR2] 목표 좌표 수신",
     description="AMR2가 한 번 호출하여 목표 좌표를 받고 Nav2로 스스로 경로를 계획함. "
                 "status=SCANNED 중 가장 오래된 vehicle_info의 event_id, plate_number를 반환. "

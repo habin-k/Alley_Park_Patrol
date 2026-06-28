@@ -170,8 +170,9 @@ class WebcamBridge(Node):
             return
 
         for obj in data.get('objects', []):
-            x = obj.get('x', 0.0)
-            y = obj.get('y', 0.0)
+            x        = obj.get('x', 0.0)
+            y        = obj.get('y', 0.0)
+            event_id = obj.get('event_id')
 
             # 무효 좌표 필터링
             if x == 0.0 or y == 0.0:
@@ -184,13 +185,13 @@ class WebcamBridge(Node):
                 continue
 
             self._sent_coords.add(key)
-            payload = {'observation_x': x, 'observation_y': y}
+            payload = {'observation_x': x, 'observation_y': y, 'event_id': event_id}
             threading.Thread(
                 target=_post,
                 args=(f'{SERVER}/api/parking/', payload),
                 daemon=True,
             ).start()
-            self.get_logger().info(f'좌표 전송: ({x:.2f}, {y:.2f})')
+            self.get_logger().info(f'좌표 전송: ({x:.2f}, {y:.2f}) event_id={event_id}')
 
 
 def main():
