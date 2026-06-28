@@ -6,8 +6,7 @@ from django.db import connection
 from .models import ParkingEvent, VehicleInfo, DisabledVehicle
 from .serializers import (
     ParkingEventCreateSerializer, ParkingEventSerializer,
-    ParkingEventNextSerializer,
-    VehicleInfoCreateSerializer, VehicleInfoNextSerializer,
+    VehicleInfoCreateSerializer,
     DisabledVehicleSerializer,
 )
 
@@ -64,31 +63,12 @@ def parking_delete(request, event_id):
 
 # ── AMR1 노드 ─────────────────────────────────────────────────
 
-@extend_schema(
-    summary="[AMR1] 목표 좌표 수신",
-    description="AMR1이 한 번 호출하여 목표 좌표를 받고 Nav2로 스스로 경로를 계획함. "
-                "status=DETECTED 중 가장 오래된 이벤트의 event_id와 observation_x/y를 반환. "
-                "없으면 event=null 반환 → AMR1 대기.",
-    responses={200: ParkingEventNextSerializer},
-)
-@api_view(['GET'])
-def parking_next(request):
-    event = ParkingEvent.objects.filter(status='DETECTED').order_by('created_at').first()
-    if not event:
-        return Response({'event': None})
-    return Response({
-        'event_id':      event.id,
-        'observation_x': event.observation_x,
-        'observation_y': event.observation_y,
-        'created_at':    event.created_at,
-    })
-
 
 @extend_schema(
     summary="[AMR1] 번호판 정보 저장",
     description="AMR1이 OCR로 번호판 인식 후 호출. vehicle_info 저장 + 해당 이벤트 status → SCANNED.",
     request=VehicleInfoCreateSerializer,
-    responses={201: VehicleInfoNextSerializer},
+    responses={201: {'description': 'vehicle_info_id 반환'}},
 )
 @api_view(['POST'])
 def vehicle_create(request):
@@ -150,25 +130,6 @@ def vehicle_get(request, event_id):
         return Response({'error': 'not found'}, status=status.HTTP_404_NOT_FOUND)
     return Response({'event_id': event_id, 'plate_number': vi.plate_number})
 
-
-@extend_schema(
-    summary="[AMR2] 목표 좌표 수신",
-    description="AMR2가 한 번 호출하여 목표 좌표를 받고 Nav2로 스스로 경로를 계획함. "
-                "status=SCANNED 중 가장 오래된 vehicle_info의 event_id, plate_number를 반환. "
-                "없으면 vehicle_info=null 반환 → AMR2 제자리 복귀.",
-    responses={200: VehicleInfoNextSerializer},
-)
-@api_view(['GET'])
-def vehicle_next(request):
-    vehicle_info = VehicleInfo.objects.filter(
-        event__status='SCANNED',
-    ).order_by('event__created_at').first()
-
-    if not vehicle_info:
-        return Response({'vehicle_info': None})
-
-    serializer = VehicleInfoNextSerializer(vehicle_info)
-    return Response(serializer.data)
 
 
 @extend_schema(

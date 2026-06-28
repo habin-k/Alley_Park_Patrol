@@ -129,16 +129,16 @@ DETECTED → SCANNED → WARNING_ISSUED
 | DELETE | `/api/parking/<id>/delete/` | DETECTED 이벤트 삭제 (차량 이동 시) |
 
 ### AMR1 (Police 1)
+> AMR1/AMR2는 서버와 직접 통신하지 않음. 웹캠 노드로부터 좌표와 vehicle_id를 직접 수신하고, 서버 통신은 bridge_ocr.py가 담당.
+
 | Method | URL | 설명 |
 |--------|-----|------|
-| GET | `/api/parking/next/` | DETECTED 이벤트의 `vehicle_id` + 좌표를 **한 번** 수신 → AMR1이 Nav2로 자율 경로 계획 |
 | GET | `/api/disabled/<번호판>/` | 장애인 차량 여부 확인 |
 | POST | `/api/vehicle/` | 번호판(`plate_number`) + base64 이미지(`ocr_image`) 저장 + status → SCANNED |
 
 ### AMR2 (Police 2)
 | Method | URL | 설명 |
 |--------|-----|------|
-| GET | `/api/vehicle/next/` | SCANNED 이벤트의 좌표를 **한 번** 수신 → AMR2가 Nav2로 자율 경로 계획. null이면 복귀 |
 | POST | `/api/vehicle/verify/` | 번호판 매칭 결과 전송 (match=true → WARNING_ISSUED, match=false → 이벤트 삭제) |
 
 ### bridge_ocr.py (OCR 노드 ↔ 서버 중계)

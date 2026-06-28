@@ -1,9 +1,9 @@
 from django.urls import path
 from .monitor_dashboard import dashboard, login_view, logout_view
 from .api_views import (
-    parking_create, parking_list, parking_next,
+    parking_create, parking_list,
     parking_delete, parking_by_vehicle,
-    vehicle_create, vehicle_next,
+    vehicle_create,
     vehicle_get, vehicle_verify, disabled_check,
 )
 from .monitor_views import (
@@ -33,7 +33,6 @@ urlpatterns = [
     path('api/parking/<int:event_id>/delete/', parking_delete, name='api_parking_delete'),
 
     # API - AMR1 (Police 1)
-    path('api/parking/next/', parking_next, name='api_parking_next'),
     path('api/vehicle/', vehicle_create, name='api_vehicle_create'),
     path('api/disabled/<str:plate_number>/', disabled_check, name='api_disabled_check'),
 
@@ -42,7 +41,6 @@ urlpatterns = [
     path('api/vehicle/<int:event_id>/', vehicle_get, name='api_vehicle_get'),
 
     # API - Police 2
-    path('api/vehicle/next/', vehicle_next, name='api_vehicle_next'),
     path('api/vehicle/verify/', vehicle_verify, name='api_vehicle_verify'),
 
     # API - 모니터링

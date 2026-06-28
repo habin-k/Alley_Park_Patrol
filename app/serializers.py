@@ -14,22 +14,12 @@ class ParkingEventSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
-class ParkingEventNextSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ParkingEvent
-        fields = ['id', 'observation_x', 'observation_y', 'status', 'created_at']
-
 
 class VehicleInfoCreateSerializer(serializers.Serializer):
     event_id     = serializers.IntegerField()
     plate_number = serializers.CharField(max_length=20)
     ocr_image    = serializers.CharField(required=False, allow_null=True, allow_blank=True)  # base64
 
-
-class VehicleInfoNextSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = VehicleInfo
-        fields = ['id', 'event_id', 'plate_number']
 
 
 class DisabledVehicleSerializer(serializers.ModelSerializer):

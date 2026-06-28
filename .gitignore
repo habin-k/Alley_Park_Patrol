@@ -4,4 +4,7 @@ __pycache__/
 *.pyo
 db.sqlite3
 mydatabase.db
+*.db
 venv/
+.ipynb_checkpoints/
+.DS_Store
