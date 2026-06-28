@@ -156,7 +156,7 @@ class WebcamBridge(Node):
         try:
             payload = {'observation_x': x, 'observation_y': y}
             if vehicle_id is not None:
-                payload['vehicle_id'] = vehicle_id
+                payload['event_id'] = vehicle_id
             resp = requests.post(f'{SERVER}/api/parking/', json=payload, timeout=2)
             if resp.status_code == 201:
                 return resp.json().get('event_id')
@@ -199,7 +199,7 @@ class WebcamBridge(Node):
         for obj in data.get('objects', []):
             x = obj.get('x', 0.0)
             y = obj.get('y', 0.0)
-            vehicle_id = obj.get('vehicle_id')
+            vehicle_id = obj.get('event_id')
 
             if x == 0.0 or y == 0.0:
                 self.get_logger().warn(f'무효 좌표 스킵: ({x:.2f}, {y:.2f})')
