@@ -85,7 +85,7 @@ class PlateLidarRunTestNode(Node):
         # 예: 0.20 -> 원점 기준 +20cm 위치, 0.35 -> +35cm 위치로 이동합니다.
         # 테스트 관찰이 쉽도록 기본값은 뒤로 돌아오지 않고 전진 방향만 사용합니다.
         self.declare_parameter('search_offsets_m', '0.60,1.00')
-        self.declare_parameter('max_search_distance_m', 1.00)
+        self.declare_parameter('max_search_distance_m', 1.50)
 
         # 전진 중 정면 가까운 장애물이 있으면 멈추는 간단한 안전장치입니다.
         self.declare_parameter('enable_front_safety_stop', True)
@@ -201,8 +201,8 @@ class PlateLidarRunTestNode(Node):
         self._sleep_with_spin(self.settle_time)
 
         target_distance = min(line['line_length'] * 2.0, self.max_search_distance)
-        offsets = [target_distance]
-
+        offsets = [target_distance] #<-만약에 후진하고 싶으면 여기에 - 부호 넣으면 됨 
+        
         if not offsets:
             self.get_logger().error("이동 가능한 search offset이 없습니다.")
             self._stop_robot()
