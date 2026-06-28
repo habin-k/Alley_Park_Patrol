@@ -416,13 +416,30 @@ class Amr2Mission(Node):
         """Nav2가 이동 goal을 받았는지 확인한다."""
         goal_handle = future.result()
         if not goal_handle.accepted:
-            self.get_logger().error('Nav2가 goal을 거부했습니다.')
-            self.state = self.IDLE
+            if self.state == self.GOING_TO_GOAL:
+                self._handle_goal_navigation_failure(
+                    'Nav2가 goal을 거부했습니다.')
+            else:
+                self.get_logger().error('Nav2가 goal을 거부했습니다.')
+                self.state = self.IDLE
             return
 
         # goal이 수락되면 이동이 끝날 때까지 결과를 기다린다.
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self._nav_result)
+
+    def _handle_goal_navigation_failure(self, reason: str):
+        """현재 목표 이동 실패를 처리한다."""
+        if self.nav_retry_count < 1:
+            self.nav_retry_count += 1
+            self.get_logger().warning(
+                f'{reason} 1회 재시도: id={self.goal_id}')
+            self.state = self.IDLE
+            return
+
+        self.get_logger().error(
+            f'{reason} 최종 실패. 다음 목표로 넘어갑니다: id={self.goal_id}')
+        self._finish_current_mission()
 
     def _nav_result(self, future):
         """Nav2 이동이 끝났을 때 실행된다."""
@@ -430,18 +447,13 @@ class Amr2Mission(Node):
 
         if status != GoalStatus.STATUS_SUCCEEDED:
             if self.state == self.GOING_TO_GOAL and self.nav_retry_count < 1:
-                self.nav_retry_count += 1
-                self.get_logger().warning(
-                    f'Nav2 이동 실패. 1회 재시도: '
-                    f'id={self.goal_id}, status={status}')
-                self.state = self.IDLE
+                self._handle_goal_navigation_failure(
+                    f'Nav2 이동 실패: status={status}')
                 return
 
             if self.state == self.GOING_TO_GOAL:
-                self.get_logger().error(
-                    f'Nav2 이동 최종 실패. 다음 목표로 넘어갑니다: '
-                    f'id={self.goal_id}, status={status}')
-                self._finish_current_mission()
+                self._handle_goal_navigation_failure(
+                    f'Nav2 이동 실패: status={status}')
                 return
 
             self.get_logger().error(f'Nav2 이동 실패: status={status}')
