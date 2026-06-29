@@ -59,7 +59,7 @@ SERVERTOOCR = 'servertoocr'                 # 등록된 차량 번호 sub (serve
 DISABLED = 'disabled'                           # 장애인 주차구역에 주차된 차량 정보 (id, 차량 번호) pub (ocr -> server)
 
 DISABLED_RESULT = 'disabled_result'             # 장애인 차량인지 아닌지 (T/F) T: 정상 F: 불법 sub (server -> ocr)
-DISABLED_RESULT_AMR = 'disabled_resuslt_amr'    # 장애인 주차구역에서 불법주차인지 정상주차인지 결과 pub (ocr -> amr)
+DISABLED_RESULT_AMR = 'disabled_result_amr'    # 장애인 주차구역에서 불법주차인지 정상주차인지 결과 pub (ocr -> amr)
 DISABLED_RESULT_ID = 'disabled_result_id'       # 장애인 주차구역에 주차된 차량 정보 (id, 이미지) 불법일때만 string으로 보냄 pub (ocr -> server)
 
 FIRECAR_RESULT = 'firecar_result'               # 소방차인지 아닌지 판단 결과 server로 pub T:정상 F:불법 (ocr -> server)
