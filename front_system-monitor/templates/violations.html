@@ -14,14 +14,14 @@
     </div>
   </div>
   <div class="tbl-wrap">
-    <table>
+    <table style="table-layout: fixed;">
       <thead>
         <tr>
-          <th>ID</th>
-          <th>차량번호</th>
-          <th>OCR 번호판 이미지</th>
-          <th>상태</th>
-          <th>탐지시각</th>
+          <th style="width:10%;">ID</th>
+          <th style="width:16%;">차량번호</th>
+          <th style="width:25%;">OCR 번호판 이미지</th>
+          <th style="width:20%;">상태</th>
+          <th style="width:20%;">탐지시각</th>
         </tr>
       </thead>
       <tbody>
@@ -33,7 +33,9 @@
           </td>
           <td>
             {% if row.status == 'WARNING_ISSUED' and row.vehicle_info and row.vehicle_info.ocr_image %}
-              <img src="data:image/jpeg;base64,{{ row.vehicle_info.ocr_image }}" style="height:48px; border-radius:4px;" alt="OCR 번호판">
+              <div class="ocr-thumb" onclick="document.getElementById('lightbox-img').src=this.querySelector('img').src; document.getElementById('lightbox').style.display='flex';">
+                <img src="data:image/jpeg;base64,{{ row.vehicle_info.ocr_image }}" alt="OCR 번호판">
+              </div>
             {% else %}
               <span class="na">-</span>
             {% endif %}
@@ -74,5 +76,11 @@
     전체 {{ total_count }}건 중 {{ (page-1)*20 + 1 }}–{{ [page*20, total_count]|min }}건 표시
   </div>
   {% endif %}
+</div>
+
+<!-- OCR 이미지 확대 보기 -->
+<div id="lightbox" onclick="this.style.display='none'"
+     style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:999; align-items:center; justify-content:center; cursor:zoom-out;">
+  <img id="lightbox-img" src="" alt="OCR 번호판 확대" style="max-width:90%; max-height:90%; border-radius:8px;">
 </div>
 {% endblock %}

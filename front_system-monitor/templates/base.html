@@ -89,7 +89,7 @@ html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui,
   position: sticky; top: 0;
   background: rgba(13,13,26,0.92);
   border-bottom: 1px solid var(--border);
-  padding: 14px 24px;
+  padding: 26px;
   display: flex; align-items: center; justify-content: space-between;
   z-index: 10;
 }
@@ -119,6 +119,16 @@ html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui,
 
 .zone { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 0.72rem; font-weight: 600; background: rgba(148,153,194,0.15); color: var(--muted); }
 
+.ocr-thumb {
+  width: 140px; height: 90px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #080810;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.ocr-thumb img { width: 100%; height: auto; object-fit: cover; display: block; }
+
 .panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 20px; }
 .panel-header {
   display: flex; align-items: center; justify-content: space-between;
@@ -138,7 +148,7 @@ html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui,
   min-height: 280px;
   display: flex; align-items: center; justify-content: center;
 }
-.webcam-wrap img { width: 100%; height: 100%; display: block; border-radius: 8px; object-fit: contain; }
+.webcam-wrap img { max-width: 100%; max-height: 100%; display: block; border-radius: 8px; object-fit: contain; }
 
 .webcam-overlay {
   position: absolute; inset: 0;
@@ -169,15 +179,15 @@ html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui,
 .tbl-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
 th { text-align: left; padding: 10px 14px; color: var(--muted); font-weight: 500; font-size: 0.75rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
-td { padding: 11px 14px; border-bottom: 1px solid rgba(30,32,64,0.6); }
+td { padding: 16px 12px; border-bottom: 1px solid var(--border); }
 tr:last-child td { border-bottom: none; }
 tr:hover td { background: rgba(255,255,255,0.02); }
 
 .filter-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
 .filter-tab {
-  display: inline-flex;
-  align-items: center;
-  padding: 5px 14px; border-radius: 20px; font-size: 0.75rem; font-weight: 600;
+  display: inline-flex; align-items: center;
+  padding: 6px 16px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600;
+  line-height: 1.2;
   border: 1px solid var(--border); color: var(--muted);
   background: none; text-decoration: none;
 }
