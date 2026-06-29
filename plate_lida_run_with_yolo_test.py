@@ -134,8 +134,8 @@ class PlateLidarRunWithYoloTestNode(Node):
         self.declare_parameter('distance_tolerance_m', 0.015)
         self.declare_parameter('settle_time_sec', 0.5)
         self.declare_parameter('move_direction', 1.0)  # +1.0 전진, -1.0 후진
-        self.declare_parameter('first_move_multiplier', 1.5)
-        self.declare_parameter('retry_total_move_multiplier', 3.5)
+        self.declare_parameter('first_move_multiplier', 3.0)
+        self.declare_parameter('retry_total_move_multiplier', 5.0)
         self.declare_parameter('max_search_distance_m', 1.50)
         self.declare_parameter('scan_rotation_max_deg', 150.0)
         self.declare_parameter('scan_rotation_speed_rad_s', 0.15)

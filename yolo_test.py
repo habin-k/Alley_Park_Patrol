@@ -17,9 +17,9 @@ class YoloTestNode(Node):
 
         self.declare_parameter(
             'model_path',
-            '/home/rokey/rokey_ws/src/final_pjt/final_pjt/semi_allimages_v5n.pt'
+            '/home/rokey/rokey_ws/src/final_pjt/final_pjt_peter/semi_allimages_v5n.pt'
         )
-        self.declare_parameter('camera_topic', '/robot2/oakd/rgb/image_raw/compressed')
+        self.declare_parameter('camera_topic', '/robot4/oakd/rgb/image_raw/compressed')
         self.declare_parameter('confidence_threshold', 0.80)
         self.declare_parameter('plate_class_id', 2)
         self.declare_parameter('show_all_classes', False)
