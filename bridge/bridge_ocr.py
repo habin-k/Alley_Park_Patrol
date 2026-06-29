@@ -19,9 +19,7 @@ bridge_ocr.py — OCR 노드 ↔ Django 서버 브리지
   match_result_id     → POST /api/vehicle/verify/       (일치 → WARNING_ISSUED + 이미지)
   disabled            → GET  /api/disabled/<plate>/     → disabled_result 발행
   disabled_result_id  → POST /api/vehicle/verify/       (장애인 구역 불법주차)
-  firecar_result_id   → POST /api/vehicle/verify/       (소방차 구역 불법주차)
-  firecar_result(True)→ POST /api/vehicle/verify/{match:false} (실제 소방차 → 이벤트 삭제)
-  /robot4/plate_id    → zone=4 수신 시 vehicle_id 저장 (firecar_result 대비)
+  firecar_result_id   → POST /api/vehicle/verify/       (소방차 구역 불법주차, 무조건 WARNING_ISSUED)
 
 실행 방법:
   source /opt/ros/humble/setup.bash
@@ -30,6 +28,7 @@ bridge_ocr.py — OCR 노드 ↔ Django 서버 브리지
 
 import json
 import threading
+from urllib.parse import quote
 
 import requests
 import rclpy
@@ -48,8 +47,6 @@ DISABLED           = 'disabled'
 DISABLED_RESULT    = 'disabled_result'
 DISABLED_RESULT_ID = 'disabled_result_id'
 FIRECAR_RESULT_ID  = 'firecar_result_id'
-FIRECAR_RESULT     = 'firecar_result'
-AMR2_PLATE_ID      = '/robot4/plate_id'
 
 
 class OcrBridge(Node):
@@ -57,15 +54,13 @@ class OcrBridge(Node):
     OCR 노드와 Django 서버 사이의 브리지 ROS2 노드.
 
     Attributes:
-        _pending_vehicle_id        : int | None — request_car 수신 시 저장. match_result(False) 때 사용.
-        _pending_firecar_vehicle_id: int | None — AMR2 zone=4 수신 시 저장. firecar_result(True) 때 사용.
+        _pending_vehicle_id: int | None — request_car 수신 시 저장. match_result(False) 때 사용.
     """
 
     def __init__(self):
         super().__init__('ocr_bridge')
 
-        self._pending_vehicle_id         = None
-        self._pending_firecar_vehicle_id = None
+        self._pending_vehicle_id = None
         self._lock = threading.Lock()
 
         # Publishers
@@ -80,8 +75,6 @@ class OcrBridge(Node):
         self.create_subscription(String, DISABLED,           self.on_disabled,           10)
         self.create_subscription(String, DISABLED_RESULT_ID, self.on_disabled_result_id, 10)
         self.create_subscription(String, FIRECAR_RESULT_ID,  self.on_firecar_result_id,  10)
-        self.create_subscription(String, AMR2_PLATE_ID,      self.on_amr2_plate_id,      10)
-        self.create_subscription(Bool,   FIRECAR_RESULT,     self.on_firecar_result,     10)
 
         self.get_logger().info('OCR 브리지 노드 시작')
 
@@ -256,7 +249,7 @@ class OcrBridge(Node):
 
         def _do():
             try:
-                resp = requests.get(f'{SERVER}/api/disabled/{plate_number}/', timeout=3)
+                resp = requests.get(f'{SERVER}/api/disabled/{quote(plate_number, safe="")}/', timeout=3)
                 if resp.status_code == 200:
                     is_disabled     = resp.json().get('is_disabled', False)
                     result_msg      = Bool()
@@ -336,60 +329,6 @@ class OcrBridge(Node):
 
         threading.Thread(target=_do, daemon=True).start()
 
-    # ── 8. AMR2 plate_id 수신 — firecar 대비 vehicle_id 저장 ─────
-    def on_amr2_plate_id(self, msg):
-        """
-        /robot4/plate_id (String) 수신.
-
-        payload: {"event_id": vehicle_id, "zone": "4"}
-        zone=4(소방차 구역)일 때만 _pending_firecar_vehicle_id에 저장.
-        firecar_result(True) 수신 시 이벤트 삭제에 사용.
-        """
-        try:
-            data = json.loads(msg.data)
-        except json.JSONDecodeError:
-            return
-        if str(data.get('zone')) == '4':
-            with self._lock:
-                self._pending_firecar_vehicle_id = data['event_id']
-
-    # ── 9. 소방차 구역 정상주차 (실제 소방차) → 이벤트 삭제 ────────
-    def on_firecar_result(self, msg):
-        """
-        firecar_result (Bool) 수신.
-
-        True  → 실제 소방차 (정상주차) → 이벤트 삭제
-        False → 불법주차 → firecar_result_id 토픽에서 이미지와 함께 처리하므로 스킵
-        """
-        if not msg.data:
-            return
-
-        with self._lock:
-            vehicle_id                       = self._pending_firecar_vehicle_id
-            self._pending_firecar_vehicle_id = None
-
-        if vehicle_id is None:
-            self.get_logger().warning('firecar_result True 수신 — pending vehicle_id 없음')
-            return
-
-        def _do():
-            db_id = self._get_db_id(vehicle_id)
-            if db_id is None:
-                self.get_logger().warning(f'소방차 정상주차 처리 취소: vehicle_id={vehicle_id} DB 레코드 없음')
-                return
-            try:
-                resp = requests.post(f'{SERVER}/api/vehicle/verify/', json={
-                    'event_id': db_id,
-                    'match':    False,
-                }, timeout=3)
-                if resp.status_code == 200:
-                    self.get_logger().info(f'소방차 정상주차 이벤트 삭제: vehicle_id={vehicle_id} → db_id={db_id}')
-                else:
-                    self.get_logger().warning(f'소방차 정상주차 이벤트 삭제 실패: {resp.status_code}')
-            except Exception as e:
-                self.get_logger().warning(f'소방차 정상주차 이벤트 삭제 오류: {e}')
-
-        threading.Thread(target=_do, daemon=True).start()
 
 
 def main():

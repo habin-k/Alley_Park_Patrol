@@ -3,7 +3,7 @@
 ## 전체 프로세스
 
 ### 1단계 - 웹캠 + YOLO (탐지 및 좌표 전송)
-웹캠이 주차장을 실시간으로 모니터링하며 YOLO 모델로 차량 객체를 탐지한다. 탐지된 차량의 Nav2 충돌 방지 보정 좌표(`observation_x/y`)를 계산하고, confidence가 높은 순서로 `vehicle_id`를 부여하여 `parking_events` 테이블에 저장한다. 이 시점에서 `status=DETECTED`로 설정된다. **웹캠은 좌표와 vehicle_id만 전송하며, zone_type과 vehicle_type은 판별하지 않는다. zone_type/vehicle_type은 DB에 저장되지 않고 AMR 내부에서만 사용한다.**
+웹캠이 주차장을 실시간으로 모니터링하며 YOLO 모델로 차량 객체를 탐지한다. **정상 주차구역(`NORMAL`)은 웹캠이 탐지 자체를 하지 않으므로** 좌표가 서버로 넘어오지 않는다. **소방차는 YOLO 모델에 학습되어 있어 탐지 대상에서 제외된다.** 즉 소방차가 소방차 전용구역에 주차해도 웹캠이 탐지하지 않는다. 탐지된 차량(불법 가능성 있는 차량)의 Nav2 충돌 방지 보정 좌표(`observation_x/y`)를 계산하고, confidence가 높은 순서로 `vehicle_id`를 부여하여 `parking_events` 테이블에 저장한다. 이 시점에서 `status=DETECTED`로 설정된다. **웹캠은 좌표와 vehicle_id만 전송하며, zone_type과 vehicle_type은 판별하지 않는다. zone_type/vehicle_type은 DB에 저장되지 않고 AMR 내부에서만 사용한다.**
 
 브리지(`bridge_webcam.py`)는 이전 프레임과 현재 프레임을 **diff 비교**하여 처리한다:
 - **새로 생긴 차량** → `POST /api/parking/` → 서버에서 받은 `event_id` 저장
@@ -11,10 +11,9 @@
 - **그대로인 차량** → 아무것도 안 함
 
 ### 2단계 - AMR1 (Police 1) - 현장 판별 + 번호판 OCR
-AMR1이 **웹캠 노드로부터 ROS2 토픽으로** `observation_x/y` 좌표와 `vehicle_id`를 직접 수신한 뒤, Nav2로 **자율적으로 경로를 계획하여** 이동한다. **서버와 직접 통신하지 않는다.** 현장 도착 후 두 가지 방법으로 `zone_type`을 판별한다:
+AMR1이 **웹캠 노드로부터 ROS2 토픽으로** `observation_x/y` 좌표와 `vehicle_id`를 직접 수신한 뒤, Nav2로 **자율적으로 경로를 계획하여** 이동한다. **서버와 직접 통신하지 않는다.** 현장 도착 후 웹캠이 전달한 좌표와 맵에 사전 정의된 구역 좌표를 비교하여 `zone_type`을 판별한다:
 
-- **주황색 주차선 감지 시** → `zone_type=NORMAL` → 정상 주차로 판단하여 **스킵**
-- **주황색 주차선 없음** → AMR 팀원이 맵에 사전 정의한 구역 좌표와 로봇의 현재 위치를 비교하여 가장 가까운 구역(`DISABLED` / `FIRE` / `Not`)을 판별
+- 웹캠이 전달한 좌표 → AMR 팀원이 맵에 사전 정의한 구역 좌표와 비교하여 가장 가까운 구역(`DISABLED` / `FIRE` / `Not`)을 판별
 
 불법 주차로 판단되면 OCR로 번호판 인식 후 `regist_car` ROS2 토픽으로 발행한다. `bridge_ocr.py`가 이를 수신하여 서버 `POST /api/vehicle/`를 호출하고, `vehicle_info` 테이블에 저장(`plate_number`, `ocr_image`)하며 `status=SCANNED`으로 업데이트한다. `disabled_vehicle`에 등록된 장애인 차량은 스킵한다. **zone_type은 DB에 저장하지 않으며 AMR 내부에서만 사용한다.**
 
@@ -31,11 +30,9 @@ AMR2가 **웹캠 노드로부터 ROS2 토픽으로** `observation_x/y` 좌표와
    - `False` (불법) → `disabled_result_id` 토픽으로 `vehicle_id` + base64 이미지 발행 → `bridge_ocr.py`가 `POST /api/vehicle/verify/ match=true` 호출 → `status=WARNING_ISSUED`
 
 #### FIRE (소방차 전용) 구역
-- 소방차는 전용 번호판을 사용하므로 번호판으로 소방차 여부를 판별한다
+- 웹캠이 소방차를 탐지하지 않으므로 이 구역에 탐지된 차량은 **무조건 불법**
 1. YOLO + OCR로 번호판 텍스트 추출
-2. `request_car` 토픽으로 `vehicle_id` 발행 → `bridge_ocr.py`가 서버에서 AMR1이 저장한 `plate_number` 조회 → `servertoocr` 토픽으로 수신하여 plate-match 수행
-   - 일치 (실제 소방차) → `firecar_result(True)` 토픽 발행 → `bridge_ocr.py`가 `POST /api/vehicle/verify/ match=false` 호출 → 이벤트 삭제
-   - 불일치 (소방차 아님) → `firecar_result_id` 토픽으로 `vehicle_id` + base64 이미지 발행 → `bridge_ocr.py`가 `POST /api/vehicle/verify/ match=true` 호출 → `status=WARNING_ISSUED`
+2. `firecar_result_id` 토픽으로 `event_id` + base64 이미지 발행 → `bridge_ocr.py`가 `POST /api/vehicle/verify/ match=true` 호출 → `status=WARNING_ISSUED`
 
 #### 그 외 구역 (Not)
 YOLO로 번호판 위치를 찾고 OCR로 번호판 텍스트를 추출하여 DB에 저장된 `plate_number`와 비교한다. 일치하면 `match_result_id` 토픽 발행 → `bridge_ocr.py`가 `POST /api/vehicle/verify/ match=true` 호출 → `status=WARNING_ISSUED`. 불일치하면 `match_result(False)` 토픽 발행 → `bridge_ocr.py`가 `POST /api/vehicle/verify/ match=false` 호출 → 이벤트 삭제.
@@ -52,7 +49,7 @@ DETECTED → SCANNED → WARNING_ISSUED
 | 노드 | 역할 | DB 작업 |
 |------|------|---------|
 | **웹캠 + YOLO** | 차량 탐지, bbox 좌표 계산 | `parking_events` INSERT (`status=DETECTED`) |
-| **AMR1 (Police 1)** | 웹캠 ROS2 토픽으로 좌표 수신 → Nav2 자율 이동 → 주차선 색 판별 + 맵 좌표 비교로 구역 판단 → 번호판 OCR 후 `regist_car` 토픽 발행. **서버 직접 통신 없음** | 직접 DB 접근 없음 (bridge_ocr 경유) |
+| **AMR1 (Police 1)** | 웹캠 ROS2 토픽으로 좌표 수신 → Nav2 자율 이동 → 웹캠 좌표와 맵 사전 정의 구역 비교로 구역 판단 → 번호판 OCR 후 `regist_car` 토픽 발행. **서버 직접 통신 없음** | 직접 DB 접근 없음 (bridge_ocr 경유) |
 | **AMR2 (Police 2)** | 웹캠 ROS2 토픽으로 좌표 수신 → Nav2 자율 이동 → YOLO 번호판 탐지 + OCR → 구역별 검증 후 결과 토픽 발행. **서버 직접 통신 없음** | 직접 DB 접근 없음 (bridge_ocr 경유) |
 | **bridge_ocr.py** | OCR 노드(plate_ocr_node.py) ↔ Django 서버 중계. vehicle_id → DB id 변환 담당 | 직접 DB 접근 없음 (HTTP API 경유) |
 
@@ -60,15 +57,15 @@ DETECTED → SCANNED → WARNING_ISSUED
 
 | 값 | 판별 방법 | 설명 | 처리 |
 |----|----------|------|------|
-| `NORMAL` | 주황색 주차선 감지 | 정상 주차구역 | **스킵** |
-| `DISABLED` | 맵 좌표 비교 | 장애인 전용 (AMR팀 사전 정의) | `disabled_vehicle` 조회 후 판단 |
-| `FIRE` | 맵 좌표 비교 | 소방차 전용 (AMR팀 사전 정의) | 번호판 plate-match → 소방차면 정상, 아니면 불법 |
-| `Not` | 주차선 없음 | 주차 구역 아님 | 불법 처리 |
+| `NORMAL` | 웹캠이 탐지 안 함 | 정상 주차구역 (웹캠 단계에서 제외) | **스킵** |
+| `DISABLED` | 웹캠 좌표 → 맵 구역 비교 | 장애인 전용 (AMR팀 사전 정의) | `disabled_vehicle` 조회 후 판단 |
+| `FIRE` | 웹캠 좌표 → 맵 구역 비교 | 소방차 전용 (AMR팀 사전 정의) | 무조건 불법 (웹캠이 소방차 탐지 안 함) → `WARNING_ISSUED` |
+| `Not` | 웹캠 좌표 → 맵 구역 없음 | 주차 구역 아님 | 불법 처리 |
 
 > **zone_type 판별 로직 (AMR1 기준)**
-> 1. 주황색 주차선 감지 → `NORMAL` → 스킵
-> 2. 주황색 아님 → 로봇 현재 위치와 맵에 사전 정의된 구역 좌표 비교 → 가장 가까운 구역으로 판별
-> 3. 어떤 구역에도 해당 없음 → `Not`
+> 1. 웹캠에서 전달받은 좌표와 맵에 사전 정의된 구역 좌표 비교 → 가장 가까운 구역으로 판별
+> 2. 어떤 구역에도 해당 없음 → `Not`
+> ※ `NORMAL` 구역은 웹캠이 탐지하지 않으므로 AMR까지 오지 않음
 
 ## 기술 스택
 
@@ -171,9 +168,7 @@ DETECTED → SCANNED → WARNING_ISSUED
 | `disabled` | 구독 | String | 장애인 차량 조회 요청 (번호판 텍스트) |
 | `disabled_result` | 발행 | Bool | 장애인 차량 조회 결과 → OCR 노드로 전달 |
 | `disabled_result_id` | 구독 | String | 장애인 구역 불법주차 → `WARNING_ISSUED` |
-| `firecar_result_id` | 구독 | String | 소방차 구역 불법주차 → `WARNING_ISSUED` |
-| `firecar_result` | 구독 | Bool | True=실제 소방차(정상주차) → 이벤트 삭제 / False=스킵(`firecar_result_id`에서 처리) |
-| `/robot4/plate_id` | 구독 | String | AMR2 zone=4 수신 시 vehicle_id 저장 (`firecar_result` 처리 대비) |
+| `firecar_result_id` | 구독 | String | 소방차 구역 불법주차 → `WARNING_ISSUED` (무조건 불법) |
 
 ### 모니터링
 | Method | URL | 설명 |

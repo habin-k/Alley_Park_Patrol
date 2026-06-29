@@ -3,7 +3,6 @@ import threading
 import time
 
 from django.http import HttpResponse
-from django.http import StreamingHttpResponse
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
@@ -235,27 +234,6 @@ def webcam_image(request):
     return HttpResponse(image_bytes, content_type='image/jpeg')
 
 
-def _mjpeg_generator():
-    while True:
-        with _lock:
-            frame_b64 = _webcam_store['frame']
-        if frame_b64:
-            image_bytes = base64.b64decode(frame_b64)
-            yield (
-                b'--frame\r\n'
-                b'Content-Type: image/jpeg\r\n\r\n' + image_bytes + b'\r\n'
-            )
-        time.sleep(0.1)
-
-
-def webcam_stream(request):
-    """실시간 MJPEG 스트리밍. 브라우저에서 자동 갱신."""
-    return StreamingHttpResponse(
-        _mjpeg_generator(),
-        content_type='multipart/x-mixed-replace; boundary=frame'
-    )
-
-
 # ── 6-2. 웹캠2 프레임 전송 / 수신 ───────────────────────────
 
 @api_view(['POST'])
@@ -279,24 +257,6 @@ def webcam2_frame_get(request):
         })
 
 
-def _mjpeg_generator2():
-    while True:
-        with _lock:
-            frame_b64 = _webcam2_store['frame']
-        if frame_b64:
-            image_bytes = base64.b64decode(frame_b64)
-            yield (
-                b'--frame\r\n'
-                b'Content-Type: image/jpeg\r\n\r\n' + image_bytes + b'\r\n'
-            )
-        time.sleep(0.1)
-
-
-def webcam2_stream(request):
-    return StreamingHttpResponse(
-        _mjpeg_generator2(),
-        content_type='multipart/x-mixed-replace; boundary=frame'
-    )
 
 
 # ── 7. AMR1 프레임 전송 / 수신 ───────────────────────────────

@@ -100,7 +100,10 @@ def vehicle_create(request):
 )
 @api_view(['GET'])
 def disabled_check(request, plate_number):
-    is_disabled = DisabledVehicle.objects.filter(plate_number=plate_number).exists()
+    normalized = plate_number.replace(" ", "")
+    is_disabled = DisabledVehicle.objects.filter(
+        plate_number__in=[plate_number, normalized]
+    ).exists()
     return Response({'plate_number': plate_number, 'is_disabled': is_disabled})
 
 

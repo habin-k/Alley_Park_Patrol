@@ -1,12 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash, Response
 import requests
 import threading
-import numpy as np
-
-import rclpy
-from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from sensor_msgs.msg import CompressedImage
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'  # 세션 암호화용 - 운영시 환경변수로 교체 권장
@@ -80,77 +74,8 @@ def delete_disabled(plate_number):
         return False
 
 
-# ----------------------------------------
-# AMR1, AMR2 카메라 - ROS2 Subscriber (compressed 토픽 구독)
-# Flask 프로세스 안에서 별도 스레드로 rclpy spin을 돌리고,
-# 콜백에서 최신 프레임(JPEG bytes)을 각각의 전역 변수에 저장한다.
-# ----------------------------------------
-AMR1_IMAGE_TOPIC = '/robot2/oakd/rgb/image_raw/compressed'  # AMR1 실제 확인된 토픽명
-AMR2_IMAGE_TOPIC = '/robot4/oakd/rgb/image_raw/compressed'  # AMR2 토픽명
-
-amr1_latest_frame = None
-amr1_frame_lock = threading.Lock()
-
-amr2_latest_frame = None
-amr2_frame_lock = threading.Lock()
-
-
-class AmrCameraSubscriber(Node):
-    """AMR1, AMR2 카메라 토픽을 동시에 구독하는 노드"""
-
-    def __init__(self):
-        super().__init__('amr_camera_subscriber')
-        qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,  # Publisher가 RELIABLE이므로 맞춰줌
-            history=HistoryPolicy.KEEP_LAST,
-            depth=1,  # 큐에 쌓이면 지연 생기므로 1로 제한
-        )
-        self.create_subscription(
-            CompressedImage,
-            AMR1_IMAGE_TOPIC,
-            self.image_callback_amr1,
-            qos
-        )
-        self.create_subscription(
-            CompressedImage,
-            AMR2_IMAGE_TOPIC,
-            self.image_callback_amr2,
-            qos
-        )
-
-    def image_callback_amr1(self, msg):
-        global amr1_latest_frame
-        try:
-            with amr1_frame_lock:
-                # msg.data는 이미 JPEG로 압축된 bytes이므로 재인코딩 없이 그대로 사용
-                amr1_latest_frame = bytes(msg.data)
-        except Exception as e:
-            # 콜백 안에서 예외가 나도 spin() 전체가 죽지 않도록 방지
-            print(f"[AMR1 CAM] 콜백 에러: {e}")
-
-    def image_callback_amr2(self, msg):
-        global amr2_latest_frame
-        try:
-            with amr2_frame_lock:
-                amr2_latest_frame = bytes(msg.data)
-        except Exception as e:
-            print(f"[AMR2 CAM] 콜백 에러: {e}")
-
-
-def start_ros2_spin():
-    """ROS2 노드를 백그라운드 스레드에서 spin"""
-    rclpy.init()
-    node = AmrCameraSubscriber()
-    try:
-        rclpy.spin(node)
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
-
-
-# Flask 시작 시 ROS2 스레드 한 번만 띄움 (use_reloader=False와 함께 사용해야 중복 실행 안 됨)
-ros2_thread = threading.Thread(target=start_ros2_spin, daemon=True)
-ros2_thread.start()
+AMR1_ENDPOINT = f'{API_BASE_URL}/api/amr1/frame/latest/'
+AMR2_ENDPOINT = f'{API_BASE_URL}/api/amr2/frame/latest/'
 
 
 # ----------------------------------------
@@ -289,26 +214,34 @@ def cameras():
 
 
 def generate_amr1_frames():
-    """ROS2 Subscriber가 받아둔 AMR1 최신 프레임을 MJPEG로 스트리밍"""
-    import time
+    import base64, time
     while True:
-        with amr1_frame_lock:
-            frame = amr1_latest_frame
-        if frame is not None:
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-        time.sleep(1 / 15)  # 약 15fps로 제한 (트래픽/CPU 절감)
+        try:
+            response = requests.get(AMR1_ENDPOINT, timeout=5)
+            data = response.json()
+            frame_b64 = data.get('frame')
+            if frame_b64:
+                frame_bytes = base64.b64decode(frame_b64)
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        except Exception as e:
+            print(f"[AMR1] API 호출 실패: {e}")
+        time.sleep(1 / 15)
 
 
 def generate_amr2_frames():
-    """ROS2 Subscriber가 받아둔 AMR2 최신 프레임을 MJPEG로 스트리밍"""
-    import time
+    import base64, time
     while True:
-        with amr2_frame_lock:
-            frame = amr2_latest_frame
-        if frame is not None:
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+        try:
+            response = requests.get(AMR2_ENDPOINT, timeout=5)
+            data = response.json()
+            frame_b64 = data.get('frame')
+            if frame_b64:
+                frame_bytes = base64.b64decode(frame_b64)
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        except Exception as e:
+            print(f"[AMR2] API 호출 실패: {e}")
         time.sleep(1 / 15)
 
 
