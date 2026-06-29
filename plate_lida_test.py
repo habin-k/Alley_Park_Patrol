@@ -24,9 +24,9 @@ class PlateLidarLineTestNode(Node):
         # 라이다 점을 사용할 각도 범위입니다.
         # 0도는 로봇 정면, +90도는 왼쪽, -90도는 오른쪽입니다.
         # robot4 환경에서는 /scan 기준 -90도가 OAK-D 카메라 정면에 가까움
-        # OAK-D RGB HFOV 약 69도 -> -90 ± 35도 = -125 ~ -55
-        self.declare_parameter('roi_angle_min_deg', -125.0)
-        self.declare_parameter('roi_angle_max_deg', -55.0)
+        # OAK-D RGB HFOV 약 69도 -> -90 ± 30도 = -120 ~ -60
+        self.declare_parameter('roi_angle_min_deg', -120.0)
+        self.declare_parameter('roi_angle_max_deg', -60.0)
 
         # 라이다 점을 사용할 거리 범위입니다.
         # 너무 가까운 잡음은 roi_range_min_m으로 제거하고,

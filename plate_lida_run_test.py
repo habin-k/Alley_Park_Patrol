@@ -40,9 +40,9 @@ class PlateLidarRunTestNode(Node):
         # 회전 오차는 "차량 직선 각도 - 카메라 정면 각도"로 계산합니다.
         self.declare_parameter('camera_forward_angle_deg', -90.0)
 
-        # 카메라 정면 기준 ROI입니다. OAK-D RGB HFOV가 약 69도라서 -90 ± 35도 근처로 잡았습니다.
-        self.declare_parameter('roi_angle_min_deg', -125.0)
-        self.declare_parameter('roi_angle_max_deg', -55.0)
+        # 카메라 정면 기준 ROI입니다. OAK-D RGB HFOV가 약 69도라서 -90 ± 30도 근처로 잡았습니다.
+        self.declare_parameter('roi_angle_min_deg', -120.0)
+        self.declare_parameter('roi_angle_max_deg', -60.0)
         self.declare_parameter('roi_range_min_m', 0.15)
         self.declare_parameter('roi_range_max_m', 0.70)
 
@@ -59,7 +59,7 @@ class PlateLidarRunTestNode(Node):
         self.declare_parameter('cluster_distance_threshold_m', 0.12)
         self.declare_parameter('ransac_iterations', 80)
         self.declare_parameter('ransac_distance_threshold_m', 0.035)
-        self.declare_parameter('min_line_length_m', 0.15)
+        self.declare_parameter('min_line_length_m', 0.10)
 
         # 동작 파라미터입니다.
         # rotation_sign:
@@ -192,9 +192,10 @@ class PlateLidarRunTestNode(Node):
             return False
 
         self._sleep_with_spin(self.settle_time)
-
-        target_distance = min(line['line_length'], self.max_search_distance)
-        target_offset = -target_distance   # +면 전진, -면 후진입니다.
+# -----------------------------------------------------------------------------------------------------------------------------
+# ------------------------------------------------가는 거리 조절 -----------------------------------------------------------------
+        target_distance = min(line['line_length'] * 2.0, self.max_search_distance)
+        target_offset = target_distance   # +면 전진, -면 후진입니다.
 
         self.get_logger().info(
             f"2단계: 평행 방향으로 전후 이동 테스트 "
@@ -316,7 +317,7 @@ class PlateLidarRunTestNode(Node):
         # 시작 yaw를 기준으로, odom yaw 변화량이 target_angle에 도달할 때까지 회전합니다.
         start_yaw = self.current_yaw
         direction = 1.0 if target_angle > 0.0 else -1.0
-        timeout = max(4.0, abs(target_angle) / max(self.angular_speed, 1e-3) + 3.0)
+        timeout = max(4.0, abs(target_angle) / max(self.angular_speed, 1e-3) + 8.0)
         start = time.monotonic()
 
         while rclpy.ok():
