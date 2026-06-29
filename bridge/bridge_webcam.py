@@ -88,8 +88,10 @@ class WebcamBridge(Node):
 
     Attributes:
         bridge        : CvBridge — ROS2 Image 메시지를 OpenCV 이미지로 변환하는 도구
-        _prev_coords  : dict — 이전 프레임에서 탐지된 차량 좌표와 event_id 매핑.
-                        key: (round(x,1), round(y,1)), value: event_id
+        _prev_coords  : dict — 이전 프레임에서 탐지된 차량 좌표와 parking_events.id(DB PK) 매핑.
+                        key: (round(x,1), round(y,1)), value: parking_events.id (DB PK)
+                        ※ value는 vehicle_id(웹캠 부여 번호)가 아니라 POST /api/parking/
+                          응답으로 받은 DB PK다. DELETE 호출 시 이 값을 사용한다.
                         diff 비교로 새 차량 POST / 없어진 차량 DELETE 처리에 사용.
     """
 
@@ -104,8 +106,10 @@ class WebcamBridge(Node):
         super().__init__('webcam_bridge')
         self.bridge = CvBridge()
 
-        # 이전 프레임 좌표 → event_id 매핑 (diff 비교용)
-        # 예: {(1.0, 2.0): 3} → 좌표 (1.0, 2.0)의 차량이 event_id=3
+        # 이전 프레임 좌표 → parking_events.id(DB PK) 매핑 (diff 비교용)
+        # 예: {(1.0, 2.0): 3} → 좌표 (1.0, 2.0)의 차량이 parking_events.id=3
+        # ※ vehicle_id(웹캠 confidence 순 번호)가 아니라 POST /api/parking/ 응답으로
+        #   받은 DB PK를 저장한다. DELETE /api/parking/<id>/delete/ 호출에 사용.
         self._prev_coords = {}
 
         # 웹캠1: 바운딩박스가 그려진 탐지 결과 이미지 → 시스템 모니터 표시용
@@ -151,7 +155,7 @@ class WebcamBridge(Node):
         [메서드] POST /api/parking/ 동기 호출. 서버로부터 event_id를 받아야 하므로 동기 처리.
 
         Returns:
-            int : 생성된 event_id. 실패 시 None.
+            int : 생성된 parking_events.id (DB PK). 실패 시 None.
         """
         try:
             payload = {'observation_x': x, 'observation_y': y}
@@ -199,6 +203,9 @@ class WebcamBridge(Node):
         for obj in data.get('objects', []):
             x = obj.get('x', 0.0)
             y = obj.get('y', 0.0)
+            # 웹캠 팀이 ROS2 메시지 필드를 'event_id'로 명명했으나,
+            # 실제 값은 웹캠이 confidence 순으로 부여한 parking_events.vehicle_id다.
+            # parking_events.id(DB PK)와 다른 값이므로 혼동 주의.
             vehicle_id = obj.get('event_id')
 
             if x == 0.0 or y == 0.0:
