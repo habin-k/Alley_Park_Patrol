@@ -3,9 +3,9 @@
 # 목적:
 #   1. YOLO 화면을 켠 상태로 번호판 탐지 상태를 확인합니다.
 #   2. 번호판이 안 보이면 라이다 직선으로 차량 옆면과 평행하게 맞춥니다.
-#   3. 초록 선 길이 기준으로 짧게 전진/후진합니다.
-#   4. 입력한 차량 map 좌표를 바라본 뒤 YOLO를 몇 초간 확인합니다.
-#   5. 실패하면 평행 자세로 되돌아가 반대 방향으로 더 이동한 뒤 다시 YOLO를 확인합니다.
+#   3. 초록 선 길이의 1.5배만큼 전진합니다.
+#   4. 입력한 차량 map 좌표가 있으면 그 방향을 바라보고, 없으면 라이다 차량 방향으로 천천히 회전합니다.
+#   5. 실패하면 평행 자세로 되돌아가 총 3.5배 위치까지 추가 전진한 뒤 다시 YOLO를 확인합니다.
 #
 # 주의:
 #   이동 중 YOLO 탐지는 기본적으로 "화면 표시용"입니다.
@@ -48,11 +48,11 @@ class PlateLidarRunWithYoloTestNode(Node):
         #   로봇을 직접 움직이는 속도 명령 출력입니다.
         # camera_topic:
         #   YOLO 입력으로 사용할 OAK-D compressed image입니다.
-        self.declare_parameter('scan_topic', '/robot4/scan')
-        self.declare_parameter('odom_topic', '/robot4/odom')
-        self.declare_parameter('amcl_pose_topic', '/robot4/amcl_pose')
-        self.declare_parameter('cmd_vel_topic', '/robot4/cmd_vel')
-        self.declare_parameter('camera_topic', '/robot4/oakd/rgb/image_raw/compressed')
+        self.declare_parameter('scan_topic', 'scan')
+        self.declare_parameter('odom_topic', 'odom')
+        self.declare_parameter('amcl_pose_topic', 'amcl_pose')
+        self.declare_parameter('cmd_vel_topic', 'cmd_vel')
+        self.declare_parameter('camera_topic', 'oakd/rgb/image_raw/compressed')
 
         # -------------------------
         # YOLO 설정
@@ -67,8 +67,8 @@ class PlateLidarRunWithYoloTestNode(Node):
         #   라이다 보정 전에 현재 자세에서 번호판을 확인하는 시간입니다.
         # final_yolo_check_sec:
         #   라이다 보정 및 target 방향 회전 후 번호판을 확인하는 시간입니다.
-        # opposite_yolo_check_sec:
-        #   반대 방향 추가 탐색 후 번호판을 확인하는 시간입니다.
+        # retry_yolo_check_sec:
+        #   2차 추가 전진 후 번호판을 확인하는 시간입니다.
         self.declare_parameter(
             'model_path',
             '/home/rokey/rokey_ws/src/final_pjt/final_pjt_peter/semi_allimages_v5n.pt'
@@ -79,7 +79,7 @@ class PlateLidarRunWithYoloTestNode(Node):
         self.declare_parameter('yolo_min_period_sec', 0.20)
         self.declare_parameter('initial_yolo_check_sec', 1.5)
         self.declare_parameter('final_yolo_check_sec', 3.0)
-        self.declare_parameter('opposite_yolo_check_sec', 3.0)
+        self.declare_parameter('retry_yolo_check_sec', 3.0)
 
         # -------------------------
         # 차량 좌표 바라보기 설정
@@ -121,13 +121,12 @@ class PlateLidarRunWithYoloTestNode(Node):
         # move_direction:#############################################################################################
         #   +1.0이면 평행 정렬 후 전진, -1.0이면 후진입니다.
         #   TurtleBot4에서 후진이 불안정할 수 있어 기본값은 전진입니다.
-        # line_length_multiplier:
-        #   라이다 초록 선 길이에 곱할 배율입니다. 2.0이면 초록 선 길이의 2배 이동입니다.
-        # enable_opposite_side_check:
-        #   1차 위치에서 번호판이 안 보이면 반대 방향 추가 탐색을 수행할지 여부입니다.
-        #   1차가 전진이면 반대 방향은 후진이 될 수 있어 기본값은 False입니다.
-        # opposite_move_multiplier:
-        #   반대 방향으로 이동할 거리 배율입니다. 기본 2.3이면 초록 선 길이의 2.3배입니다.
+        # first_move_multiplier:
+        #   1차 전진 거리입니다. 1.5면 초록 선 길이의 1.5배입니다.
+        # retry_total_move_multiplier:
+        #   2차 확인 위치의 총 이동 거리입니다. 3.5면 시작점 기준 초록 선 길이의 3.5배입니다.
+        # scan_rotation_*:
+        #   테스트처럼 차량 좌표가 없을 때, 라이다 cluster가 있던 방향으로 천천히 회전하며 YOLO를 봅니다.
         self.declare_parameter('rotation_sign', 1.0)
         self.declare_parameter('angular_speed_rad_s', 0.25)
         self.declare_parameter('linear_speed_m_s', 0.05)
@@ -135,10 +134,11 @@ class PlateLidarRunWithYoloTestNode(Node):
         self.declare_parameter('distance_tolerance_m', 0.015)
         self.declare_parameter('settle_time_sec', 0.5)
         self.declare_parameter('move_direction', 1.0)  # +1.0 전진, -1.0 후진
-        self.declare_parameter('line_length_multiplier', 1.0)
-        self.declare_parameter('enable_opposite_side_check', False)
-        self.declare_parameter('opposite_move_multiplier', 2.3)
+        self.declare_parameter('first_move_multiplier', 1.5)
+        self.declare_parameter('retry_total_move_multiplier', 3.5)
         self.declare_parameter('max_search_distance_m', 1.50)
+        self.declare_parameter('scan_rotation_max_deg', 150.0)
+        self.declare_parameter('scan_rotation_speed_rad_s', 0.15)
 
         # 전진 중 안전 정지입니다. 후진 안전 검사는 아직 넣지 않았습니다.
         self.declare_parameter('enable_front_safety_stop', True)
@@ -161,7 +161,7 @@ class PlateLidarRunWithYoloTestNode(Node):
         self.yolo_min_period = self.get_parameter('yolo_min_period_sec').value
         self.initial_yolo_check_sec = self.get_parameter('initial_yolo_check_sec').value
         self.final_yolo_check_sec = self.get_parameter('final_yolo_check_sec').value
-        self.opposite_yolo_check_sec = self.get_parameter('opposite_yolo_check_sec').value
+        self.retry_yolo_check_sec = self.get_parameter('retry_yolo_check_sec').value
 
         self.use_target_pose = self.get_parameter('use_target_pose').value
         self.target_x = self.get_parameter('target_x').value
@@ -190,12 +190,15 @@ class PlateLidarRunWithYoloTestNode(Node):
         self.distance_tolerance = self.get_parameter('distance_tolerance_m').value
         self.settle_time = self.get_parameter('settle_time_sec').value
         self.move_direction = self.get_parameter('move_direction').value
-        self.line_length_multiplier = self.get_parameter('line_length_multiplier').value
-        self.enable_opposite_side_check = self.get_parameter(
-            'enable_opposite_side_check'
+        self.first_move_multiplier = self.get_parameter('first_move_multiplier').value
+        self.retry_total_move_multiplier = self.get_parameter(
+            'retry_total_move_multiplier'
         ).value
-        self.opposite_move_multiplier = self.get_parameter('opposite_move_multiplier').value
         self.max_search_distance = self.get_parameter('max_search_distance_m').value
+        self.scan_rotation_max = math.radians(
+            self.get_parameter('scan_rotation_max_deg').value
+        )
+        self.scan_rotation_speed = self.get_parameter('scan_rotation_speed_rad_s').value
         self.enable_front_safety_stop = self.get_parameter(
             'enable_front_safety_stop'
         ).value
@@ -270,7 +273,7 @@ class PlateLidarRunWithYoloTestNode(Node):
         self.get_logger().info(f"YOLO class names: {self.class_names}")
 
     def run_sequence(self):
-        """YOLO 초기 확인 -> 라이다 보정 -> 목표 좌표 바라보기 -> 필요 시 반대 방향 확인.
+        """YOLO 초기 확인 -> 라이다 보정 -> 1.5배 전진 -> 필요 시 3.5배 위치 재확인.
 
         이 함수는 테스트용으로 한 번의 recovery 흐름을 끝까지 실행합니다.
         실제 미션 노드에 합칠 때는 이 blocking 구조를 timer/state 방식으로 바꾸는 편이 좋습니다.
@@ -312,18 +315,18 @@ class PlateLidarRunWithYoloTestNode(Node):
 
         self._sleep_with_spin(self.settle_time)
 
-        # 4. 라이다 초록 선 길이를 기준으로 전진/후진 이동 거리를 정합니다.
-        # 기본값은 초록 선 길이의 1배만큼 전진입니다.
-        target_distance = min(
-            line['line_length'] * self.line_length_multiplier,
+        # 4. 라이다 초록 선 길이를 기준으로 1차 전진 거리를 정합니다.
+        # 기본값은 초록 선 길이의 1.5배만큼 전진입니다.
+        first_distance = min(
+            line['line_length'] * self.first_move_multiplier,
             self.max_search_distance
         )
-        target_offset = self._move_direction_sign() * target_distance
+        target_offset = self._move_direction_sign() * first_distance
 
         self.get_logger().info(
-            f"2단계: 평행 방향 이동 "
+            f"2단계: 1차 평행 방향 이동 "
             f"(line_length={line['line_length']:.2f} m, "
-            f"multiplier={self.line_length_multiplier:.2f}, "
+            f"multiplier={self.first_move_multiplier:.2f}, "
             f"target_offset={target_offset:+.2f} m)"
         )
         if abs(target_offset) > self.distance_tolerance:
@@ -333,7 +336,7 @@ class PlateLidarRunWithYoloTestNode(Node):
             if self.last_move_stopped_by_obstacle:
                 self.get_logger().warning(
                     "전진 중 장애물을 만나 목표 거리까지 가지 못했습니다. "
-                    "현재 위치에서 차량 좌표 방향을 바라봅니다."
+                    "현재 위치에서 번호판 확인 자세를 만듭니다."
                 )
 
         self._stop_robot()
@@ -343,43 +346,24 @@ class PlateLidarRunWithYoloTestNode(Node):
         # 1차 YOLO 확인 실패 시 이 yaw로 되돌아와 다시 차량면과 평행한 자세를 만듭니다.
         parallel_odom_yaw = self.current_yaw
 
-        # 5. 차량 map 좌표를 알고 있으면, 이동 후 그 좌표를 바라보도록 회전합니다.
-        # 이 단계 뒤에만 YOLO 성공 판정을 다시 허용하므로 다른 차량 오탐을 줄일 수 있습니다.
-        if self.use_target_pose:
-            self.get_logger().info(
-                f"3단계: 차량 좌표 방향 바라보기 "
-                f"(target_x={self.target_x:.3f}, target_y={self.target_y:.3f})"
-            )
-            if not self._face_target_pose():
-                self._stop_robot()
-                return False
-            self._sleep_with_spin(self.settle_time)
-        else:
-            self.get_logger().warning(
-                "use_target_pose=False 입니다. 차량 좌표 방향 회전 없이 최종 YOLO 확인을 진행합니다."
-            )
+        # 5. 차량 좌표가 있으면 그 좌표를 보고, 테스트처럼 좌표가 없으면 차량 방향으로 천천히 회전합니다.
+        if self._look_for_plate_after_move(line, '1차 이동 후 번호판 확인', self.final_yolo_check_sec):
+            return True
 
-        # 6. 최종 자세에서만 YOLO 탐지를 성공으로 인정합니다.
-        if self.final_yolo_check_sec > 0.0:
-            if self._wait_for_plate_detection(
-                self.final_yolo_check_sec,
-                '최종 자세에서 번호판 확인'
-            ):
-                self.get_logger().info("최종 자세에서 번호판 탐지 성공.")
-                return True
+        # 1차 전진 중 장애물로 멈춘 경우 같은 방향으로 더 가는 것은 위험하므로 실패 처리합니다.
+        if self.last_move_stopped_by_obstacle:
+            self._stop_robot()
+            self.get_logger().warning("장애물로 1차 이동이 중단되어 2차 전진은 생략합니다.")
+            return False
 
-        if self.enable_opposite_side_check:
-            return self._run_opposite_side_check(line, parallel_odom_yaw)
+        # 6. 실패하면 평행 자세로 되돌아간 뒤, 시작점 기준 총 3.5배 위치가 되도록 추가 전진합니다.
+        return self._run_retry_forward_check(line, parallel_odom_yaw, first_distance)
 
-        self._stop_robot()
-        self.get_logger().warning("번호판을 탐지하지 못했습니다.")
-        return False
+    def _run_retry_forward_check(self, line, parallel_odom_yaw, first_distance):
+        """1차 확인 실패 시 총 3.5배 위치까지 추가 전진해 다시 YOLO를 확인합니다."""
+        self.get_logger().info("4단계: 1차 확인 실패. 2차 추가 전진 탐색을 시작합니다.")
 
-    def _run_opposite_side_check(self, line, parallel_odom_yaw):
-        """1차 확인 실패 시 반대 방향으로 이동해 다시 target 좌표를 바라보고 YOLO를 확인합니다."""
-        self.get_logger().info("4단계: 1차 확인 실패. 반대 방향 추가 탐색을 시작합니다.")
-
-        # 1차 확인을 위해 target 방향으로 돌아간 상태일 수 있으므로,
+        # 1차 확인을 위해 target 방향/스캔 방향으로 돌아간 상태일 수 있으므로,
         # 먼저 라이다 보정 직후의 평행 자세로 되돌아갑니다.
         rotate_back = self._normalize_angle(parallel_odom_yaw - self.current_yaw)
         self.get_logger().info(
@@ -391,50 +375,111 @@ class PlateLidarRunWithYoloTestNode(Node):
 
         self._sleep_with_spin(self.settle_time)
 
-        # 첫 이동 방향의 반대 방향으로 초록 선 길이의 opposite_move_multiplier배만큼 이동합니다.
-        # 기본값에서는 1차가 후진(-)이므로 2차는 전진(+)입니다.
-        opposite_distance = min(
-            line['line_length'] * self.opposite_move_multiplier,
+        # 시작점 기준 총 retry_total_move_multiplier배 위치가 되도록, 현재 위치에서 부족분만 더 전진합니다.
+        retry_total_distance = min(
+            line['line_length'] * self.retry_total_move_multiplier,
             self.max_search_distance
         )
-        opposite_offset = -self._move_direction_sign() * opposite_distance
+        additional_distance = max(0.0, retry_total_distance - first_distance)
+        retry_offset = self._move_direction_sign() * additional_distance
         self.get_logger().info(
-            f"반대 방향 이동 "
+            f"2차 추가 평행 방향 이동 "
             f"(line_length={line['line_length']:.2f} m, "
-            f"multiplier={self.opposite_move_multiplier:.2f}, "
-            f"target_offset={opposite_offset:+.2f} m)"
+            f"total_multiplier={self.retry_total_move_multiplier:.2f}, "
+            f"additional_offset={retry_offset:+.2f} m)"
         )
 
-        if abs(opposite_offset) > self.distance_tolerance:
-            if not self._move_straight(opposite_offset):
+        if abs(retry_offset) > self.distance_tolerance:
+            if not self._move_straight(retry_offset):
                 self._stop_robot()
                 return False
+
+            if self.last_move_stopped_by_obstacle:
+                self.get_logger().warning(
+                    "2차 전진 중 장애물을 만나 현재 위치에서 번호판 확인 자세를 만듭니다."
+                )
 
         self._stop_robot()
         self._sleep_with_spin(self.settle_time)
 
-        # 반대편 위치에서도 다시 차량 좌표 방향을 바라보고 번호판을 확인합니다.
+        if self._look_for_plate_after_move(line, '2차 이동 후 번호판 확인', self.retry_yolo_check_sec):
+            return True
+
+        self._stop_robot()
+        self.get_logger().warning("2차 위치에서도 번호판을 탐지하지 못했습니다.")
+        return False
+
+    def _look_for_plate_after_move(self, line, label, check_duration):
+        """이동 후 차량 좌표를 보거나, 좌표가 없으면 라이다 방향으로 스캔하며 번호판을 확인합니다."""
         if self.use_target_pose:
-            self.get_logger().info("반대편 위치에서 차량 좌표 방향을 다시 바라봅니다.")
+            self.get_logger().info(
+                f"{label}: 차량 좌표 방향 바라보기 "
+                f"(target_x={self.target_x:.3f}, target_y={self.target_y:.3f})"
+            )
             if not self._face_target_pose():
                 self._stop_robot()
                 return False
             self._sleep_with_spin(self.settle_time)
+
+            if check_duration > 0.0:
+                if self._wait_for_plate_detection(check_duration, label):
+                    self.get_logger().info(f"{label} 성공.")
+                    return True
         else:
             self.get_logger().warning(
-                "use_target_pose=False 입니다. 반대편 위치에서도 좌표 방향 회전 없이 YOLO를 확인합니다."
+                "use_target_pose=False 입니다. 라이다 차량 방향으로 천천히 회전하며 YOLO를 확인합니다."
             )
-
-        if self.opposite_yolo_check_sec > 0.0:
-            if self._wait_for_plate_detection(
-                self.opposite_yolo_check_sec,
-                '반대편 위치에서 번호판 확인'
-            ):
-                self.get_logger().info("반대편 위치에서 번호판 탐지 성공.")
+            if self._scan_rotate_for_plate(line, label):
                 return True
 
+        return False
+
+    def _scan_rotate_for_plate(self, line, label):
+        """차량 좌표가 없을 때 라이다 직선이 있던 방향으로 최대 scan_rotation_max만큼 천천히 회전합니다."""
+        if self.scan_rotation_max <= self.angle_tolerance:
+            return False
+
+        # 평행 정렬할 때 돌았던 방향의 반대쪽이 대체로 라이다가 차량을 보던 방향입니다.
+        # 실제 로봇 장착 방향이 다르면 rotation_sign 또는 camera_forward_angle_deg를 먼저 맞춰야 합니다.
+        scan_direction = -1.0 if line['heading_error'] >= 0.0 else 1.0
+        start_yaw = self.current_yaw
+        start = time.monotonic()
+        timeout = max(
+            8.0,
+            self.scan_rotation_max / max(abs(self.scan_rotation_speed), 1e-3) + 3.0
+        )
+
+        self.accepted_plate_detected = False
+        self.accept_plate_detection = True
+        self.get_logger().info(
+            f"{label}: 최대 {math.degrees(self.scan_rotation_max):.1f}도 스캔 회전"
+        )
+
+        while rclpy.ok():
+            rclpy.spin_once(self, timeout_sec=0.05)
+
+            if self.accepted_plate_detected:
+                self.accept_plate_detection = False
+                self._stop_robot()
+                self.get_logger().info(
+                    f"스캔 회전 중 번호판 탐지: confidence={self.latest_plate_confidence:.2f}"
+                )
+                return True
+
+            rotated = abs(self._normalize_angle(self.current_yaw - start_yaw))
+            if rotated >= self.scan_rotation_max:
+                break
+
+            if time.monotonic() - start > timeout:
+                self.get_logger().warning("스캔 회전 timeout이 발생했습니다.")
+                break
+
+            twist = Twist()
+            twist.angular.z = scan_direction * abs(self.scan_rotation_speed)
+            self.cmd_pub.publish(twist)
+
+        self.accept_plate_detection = False
         self._stop_robot()
-        self.get_logger().warning("반대편 위치에서도 번호판을 탐지하지 못했습니다.")
         return False
 
     def image_callback(self, msg):
