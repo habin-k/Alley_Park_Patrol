@@ -14,17 +14,31 @@ from transforms3d.euler import euler2quat
 from turtlebot4_navigation.turtlebot4_navigator import TurtleBot4Navigator
 from geometry_msgs.msg import PoseWithCovarianceStamped
 
+from visualization_msgs.msg import Marker, MarkerArray
+
+from rclpy.qos import QoSProfile
+from rclpy.qos import ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy
+from rclpy.qos import HistoryPolicy
+
+amcl_qos = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+)
+
 # INITIAL_X = 0.0
 # INITIAL_Y = 0.11
 # INITIAL_YAW = 0.0
 
 # PATROL TARGET
 PATROL_TARGETS = [
-            (-0.805, 0.392, 0.0),          
-            (-3.6, 0.265, 0.0),
-            (-5.0, 0.0391, 0.0),
-            (-4.72, 3.74, 0.0),
-            (-0.103, 3.58, 0.0)
+            (-0.719, 0.324, 0.0),          
+            (-3.4, 0.257, 0.0),
+            (-5.2, 0.118, 0.0),
+            (-4.8, 3.94, 0.0),
+            (-0.056, 3.47, 0.0)
 
         ]
 
@@ -41,8 +55,8 @@ class Amrmove(Node):
     # 초기화
     #-----------
     def __init__(self):
-        super().__init__('amr_move', namespace='/robot4')
-        self.navigator = TurtleBot4Navigator(namespace='/robot4')
+        super().__init__('amr_move', namespace='/robot2')
+        self.navigator = TurtleBot4Navigator(namespace='/robot2')
         
         self.default_paths = []
         self.mission_paths = []
@@ -62,13 +76,23 @@ class Amrmove(Node):
         self.DUPLICATE_THRESHOLD = 0.05
         
         self.sub_wb_xyz = self.create_subscription(String, '/webcam_objects/map_detections', self.xyz_callback, 10)
-        self.sub_amcl = self.create_subscription(PoseWithCovarianceStamped, "/robot4/amcl_pose", self.amcl_callback, 10)
+        self.sub_amcl = self.create_subscription(PoseWithCovarianceStamped, "/robot2/amcl_pose", self.amcl_callback, amcl_qos)
         self.pub_xyzr_amr2 = self.create_publisher(String, '/a_to_b', 10)
+        self.pub_targets = self.create_publisher(MarkerArray, "/robot2/mission_targets", 10)
+        self.pub_debug_path = self.create_publisher(Path, "/robot2/debug_path", 10)
+
+        self.get_logger().info("amcl subscription created")
+        self.get_logger().info(f"Resolved topic = {self.resolve_topic_name('/robot2/amcl_pose')}")
+        
+        self.wait_until = None
+
 
     #-----------
     # 콜백
     #-----------
     def amcl_callback(self, msg):
+        print("CALLBACK")
+        self.get_logger().info("AMCL CALLBACK")
         self.current_pose = PoseStamped()
         self.current_pose.header = msg.header
         self.current_pose.pose = msg.pose.pose
@@ -107,6 +131,41 @@ class Amrmove(Node):
         self.sort_xyzr()
         self.path_remake()
 
+    # 디버깅용
+    def publish_targets(self):
+        marker_array = MarkerArray()
+
+        for i, target in enumerate(self.targets):
+            marker = Marker()
+
+            marker.header.frame_id = "map"
+            marker.header.stamp = self.get_clock().now().to_msg()
+
+            marker.ns = "mission_targets"
+            marker.id = i
+
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+
+            marker.pose.position.x = target["x"]
+            marker.pose.position.y = target["y"]
+            marker.pose.position.z = 0.1
+
+            marker.pose.orientation.w = 1.0
+
+            marker.scale.x = 0.2
+            marker.scale.y = 0.2
+            marker.scale.z = 0.2
+
+            marker.color.r = 1.0
+            marker.color.g = 0.0
+            marker.color.b = 0.0
+            marker.color.a = 1.0
+
+            marker_array.markers.append(marker)
+
+        self.pub_targets.publish(marker_array)
+
     #-----------
     # 데이터 처리
     #-----------
@@ -125,11 +184,11 @@ class Amrmove(Node):
 
             targets = []
 
-            OFFSET_X_1 = 0.351
-            OFFSET_Y_1 = -0.455
+            OFFSET_X_1 = -0.14
+            OFFSET_Y_1 = -0.465
 
-            OFFSET_X_2 = -0.351
-            OFFSET_Y_2 = -0.455
+            OFFSET_X_2 = 0.32
+            OFFSET_Y_2 = 0.931
 
             for obj in data["objects"]:
                 event_id = obj["event_id"]
@@ -140,13 +199,25 @@ class Amrmove(Node):
                     final_x = raw_x + OFFSET_X_1
                     final_y = raw_y + OFFSET_Y_1
                 
-                elif zone == 2 :
+                elif zone == 2:
                     final_x = raw_x + OFFSET_X_2
                     final_y = raw_y + OFFSET_Y_2
                 
-                else:
+                elif zone ==3:
                     self.get_logger().warn(f"another zone not save {zone}")
                     continue
+
+                elif zone == 4:
+                    self.get_logger().warn(f"another zone not save {zone}")
+                    continue
+
+                else :
+                    self.get_logger().warn(f"이상한 존 들어옴 {zone}")
+                    
+                
+                # else:
+                #     self.get_logger().warn(f"another zone not save {zone}")
+                #     continue
                 
                 targets.append({
                     "event_id": event_id,
@@ -166,6 +237,8 @@ class Amrmove(Node):
 
         data = {
             "event_id": target["event_id"],
+            "zone": target["zone"],
+
             "x": self.current_pose.pose.position.x,
             "y": self.current_pose.pose.position.y,
             "orientation": {
@@ -193,8 +266,8 @@ class Amrmove(Node):
 
         qw, qx, qy, qz = euler2quat(0.0, 0.0, yaw)
 
-        pose.pose.orientation.x = 0.0
-        pose.pose.orientation.y = 0.0
+        pose.pose.orientation.x = qx
+        pose.pose.orientation.y = qy
         pose.pose.orientation.z = qz
         pose.pose.orientation.w = qw
 
@@ -255,9 +328,12 @@ class Amrmove(Node):
             )
             path = self.navigator.getPath(start, goal)
 
+            if path is not None:
+                self.pub_debug_path.publish(path)
+
             if path is None:
                 self.get_logger().error(f"path{i} no !! ")
-                continue
+                
 
             self.default_paths.append(path)
             self.patrol_waypoints.extend(path.poses)
@@ -327,9 +403,11 @@ class Amrmove(Node):
             if path is None:
                 self.get_logger().warn(f"{target['event_id']} path make fail")
                 continue
-
+            
+            self.pub_debug_path.publish(path)
             self.mission_paths.append(path)
             self.mission_targets.append(target)
+            self.publish_targets()
 
             start = goal
         
@@ -384,6 +462,11 @@ class Amrmove(Node):
             self.current_task = False 
 
     def follow_path(self):
+        if self.wait_until is not None:
+            if time.time() < self.wait_until:
+                return
+            self.wait_until = None
+
         if self.current_pose is None:
             return
         
@@ -398,11 +481,37 @@ class Amrmove(Node):
             return
         
         if not self.current_task:
-            self.navigator.followPath(paths[self.path_index])
-            self.current_task = True
-            self.get_logger().info(f"start path {self.path_index}")
-            return
+            if not self.current_task:
+
+                if self.mode == "PATROL":
+
+                    goal = self.make_pose(
+                        "map",
+                        PATROL_TARGETS[self.path_index][0],
+                        PATROL_TARGETS[self.path_index][1],
+                        PATROL_TARGETS[self.path_index][2]
+                    )
+
+                    path = self.navigator.getPath(self.current_pose, goal)
+
+                    if path is None:
+                        self.get_logger().error("Patrol path generation failed")
+                        return
+
+                    self.navigator.followPath(path)
+
+                else:
+                    self.navigator.followPath(paths[self.path_index])
+
+                self.current_task = True
+                self.get_logger().info(f"start path {self.path_index}")
+                return
         
+        # 디버깅 용 
+        feedback = self.navigator.getFeedback()
+        if feedback is not None:
+            print(feedback)
+
         if self.navigator.isTaskComplete():
             result = self.navigator.getResult()
             self.current_task = False
@@ -412,6 +521,7 @@ class Amrmove(Node):
                     self.finished_target = self.mission_targets[self.path_index]
                     self.publish_target_to_amr2(self.finished_target)
                     self.get_logger().info(f"target reached: {self.finished_target['event_id']}")
+                    self.wait_until = time.time() + 3.0
                 self.path_index += 1
 
                 if self.mode == "PATROL":
@@ -453,35 +563,36 @@ class Amrmove(Node):
 # main
 #-----------    
 def main(args=None):
-    rclpy.init(args = args)
+    rclpy.init(args=args)
+
     node = Amrmove()
 
     node.get_logger().info("nav 켜지는 중")
-    node.navigator.waitUntilNav2Active()
+
+    # 나중에 코드에서 Initial Pose를 줄 때 사용
+    # node.navigator.waitUntilNav2Active()
+
     node.get_logger().info("nav 떴다")
 
-    # initial_pose = node.make_pose("map", INITIAL_X, INITIAL_Y, INITIAL_YAW)
-    # node.navigator.setInitialPose(initial_pose)
-    # node.get_logger().info("Initial pose send")
-    time.sleep(3.0)
+    # RViz에서 Initial Pose를 줄 때까지 대기
     node.get_logger().info("/amcl_pose ... loading")
-    while rclpy.ok() and node.current_pose is None:
-        rclpy.spin_once(node, timeout_sec=1.0)
-    node.get_logger().info("current finish")
 
-    # if node.navigator.getDockedStatus():
-    #     node.get_logger().info("robot is docked. undocking...")
-    #     node.navigator.undock()
-    #     node.get_logger().info("undock complete")
-    
+    while rclpy.ok() and node.current_pose is None:
+        rclpy.spin_once(node, timeout_sec=0.1)
+
+    node.get_logger().info("amcl_pose received")
+
+    # 순찰 경로 생성
     node.default_path(node.current_pose)
 
+    # 메인 루프
     while rclpy.ok():
         rclpy.spin_once(node, timeout_sec=0.1)
         node.follow_path()
-    
+
     node.destroy_node()
     rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()
