@@ -341,45 +341,45 @@ class PlateOCRNode(Node):
         
         normalized = self.normalize_plate(self.detected_number)
 
-        is_firecar = (
-            normalized.startswith("998") or
-            normalized.startswith("999") or
-            normalized.startswith("98")  or
-            normalized.startswith("99")
-        )
+        # is_firecar = (
+        #     normalized.startswith("998") or
+        #     normalized.startswith("999") or
+        #     normalized.startswith("98")  or
+        #     normalized.startswith("99")
+        # )
                     
-        server_msg = Bool()
-        server_msg.data = is_firecar
-        self.firecar_result.publish(server_msg)
-        self.get_logger().info("Firecar Result Published")
+        # server_msg = Bool()
+        # server_msg.data = False
+        # self.firecar_result.publish(server_msg)
+        # self.get_logger().info("Firecar Result Published")
 
-        amr_msg = Bool()
-        amr_msg.data = not is_firecar
-        self.firecar_amr.publish(amr_msg)
+        # amr_msg = Bool()
+        # amr_msg.data = not is_firecar
+        # self.firecar_amr.publish(amr_msg)
 
        
         # 소방차 전용 구역에서 불법주차인 경우 서버와의 통신
         # is_firecar == False
-        if not is_firecar:
-            success, buffer = cv2.imencode(".jpg", self.detected_image)
+        # if not is_firecar:
+        success, buffer = cv2.imencode(".jpg", self.detected_image)
         
-            if not success:
-                self.get_logger().warning("Image Encoding Failed")
-                return
+        if not success:
+            self.get_logger().warning("Image Encoding Failed")
+            return
         
-            image_base64 = base64.b64encode(buffer).decode("utf-8")
-            payload = {
-                "event_id": self.detected_id,
-                "car_number": self.detected_number,
-                "image": image_base64
-            }
+        image_base64 = base64.b64encode(buffer).decode("utf-8")
+        payload = {
+            "event_id": self.detected_id,
+            "car_number": self.detected_number,
+            "image": image_base64
+        }
 
-            result_msg = String()
-            result_msg.data = json.dumps(payload)
+        result_msg = String()
+        result_msg.data = json.dumps(payload)
 
-            self.firecar_result_id.publish(result_msg)
+        self.firecar_result_id.publish(result_msg)
 
-            self.get_logger().info("Firecar Result ID Published")
+        self.get_logger().info("Firecar Result ID Published")
         
         self.clear_detected_data()
 
