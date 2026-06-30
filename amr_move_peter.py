@@ -63,25 +63,34 @@ PATROL_TARGETS = [
 # ]
 
 class Amrmove(Node):
+    """순찰/미션 이동과 번호판 재탐색을 함께 수행하는 AMR 제어 노드입니다."""
+
     #-----------
     # 초기화
     #-----------
     def __init__(self):
         super().__init__('amr_move', namespace='/robot2')
         self.navigator = TurtleBot4Navigator(namespace='/robot2')
-        
+
+        # Nav2 경로 상태입니다. mode 값에 따라 아래 path list 중 하나를 따라갑니다.
         self.default_paths = []
         self.mission_paths = []
         self.return_paths = []
         self.mission_targets = []
         self.finished_target = None
+
+        # 현재 수행 중인 path index와 주행 상태입니다.
+        # mode: PATROL(순찰), MISSION(차량 좌표 방문), RETURN(순찰 경로 복귀)
         self.path_index = 0
         self.mode = "PATROL"
         self.current_task = False
         self.current_pose = None
+
+        # 순찰 경로를 waypoint 단위로 펼쳐서, 미션 정렬과 복귀 경로 계산에 사용합니다.
         self.path_ranges = []
         self.patrol_waypoints = []
 
+        # 새로 받은 미션 target과 중복 판단용 좌표 저장소입니다.
         self.targets = []
         self.pending_targets =[]
         self.known_locations = []
@@ -126,7 +135,8 @@ class Amrmove(Node):
         self.declare_parameter('ransac_distance_threshold_m', 0.035)
         self.declare_parameter('min_line_length_m', 0.15)
 
-        # 1차는 초록 선 길이의 1.5배, 실패 시 추가 2.0배를 더 가서 총 3.5배 위치를 봅니다.
+        # 라이다로 추정한 초록 선 길이를 기준으로 전방 탐색 거리를 정합니다.
+        # 기본값은 1차 3.0배, 2차 총 6.0배이며 max_search_distance_m으로 상한을 둡니다.
         self.declare_parameter('rotation_sign', 1.0)
         self.declare_parameter('angular_speed_rad_s', 0.25)
         self.declare_parameter('linear_speed_m_s', 0.05)
@@ -135,7 +145,7 @@ class Amrmove(Node):
         self.declare_parameter('settle_time_sec', 0.5)
         self.declare_parameter('first_move_multiplier', 3.0)
         self.declare_parameter('retry_total_move_multiplier', 6.0)
-        self.declare_parameter('max_search_distance_m', 1.50)
+        self.declare_parameter('max_search_distance_m', 1.00)
         self.declare_parameter('enable_front_safety_stop', True)
         self.declare_parameter('front_safety_min_deg', -120.0)
         self.declare_parameter('front_safety_max_deg', -60.0)
@@ -144,12 +154,18 @@ class Amrmove(Node):
         self.declare_parameter('plate_log_period_sec', 0.5)
 
         self._load_plate_parameters()
-        
+
+        # -------------------------
+        # ROS topic 입출력
+        # -------------------------
+        # 웹캠 좌표는 절대 토픽으로 받고, robot2의 센서/제어 토픽은 노드 namespace 기준 상대 토픽을 씁니다.
         self.sub_wb_xyz = self.create_subscription(String, '/webcam_objects/map_detections', self.xyz_callback, 10)
         self.sub_amcl = self.create_subscription(PoseWithCovarianceStamped, "/robot2/amcl_pose", self.amcl_callback, amcl_qos)
         self.scan_sub = self.create_subscription(LaserScan, self.scan_topic, self.scan_callback, 10)
         self.odom_sub = self.create_subscription(Odometry, self.odom_topic, self.odom_callback, 10)
         self.image_sub = self.create_subscription(CompressedImage, self.camera_topic, self.image_callback, 10)
+
+        # 번호판 성공 시 기존 AMR2 전달 토픽과 번호판 이미지/id 토픽을 함께 발행합니다.
         self.pub_xyzr_amr2 = self.create_publisher(String, '/a_to_b', 10)
         self.pub_target_plate_image = self.create_publisher(
             CompressedImage,
@@ -158,6 +174,8 @@ class Amrmove(Node):
         )
         self.pub_plate_id = self.create_publisher(String, self.plate_id_topic, 10)
         self.cmd_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
+
+        # RViz 디버깅용 marker/path 토픽입니다.
         self.pub_targets = self.create_publisher(MarkerArray, "/robot2/mission_targets", 10)
         self.pub_debug_path = self.create_publisher(Path, "/robot2/debug_path", 10)
         self.marker_pub = self.create_publisher(Marker, 'plate_lidar_line_marker', 10)
@@ -184,6 +202,8 @@ class Amrmove(Node):
         self.class_names = {}
         self.window_name = 'amr_move_plate_yolo_view'
         self.last_yolo_time = 0.0
+
+        # latest_*는 단순 표시 상태이고, accepted_*는 실제 publish에 사용할 성공 상태입니다.
         self.latest_plate_detected = False
         self.latest_plate_stamp = 0.0
         self.latest_plate_confidence = 0.0
@@ -277,6 +297,7 @@ class Amrmove(Node):
     # 콜백
     #-----------
     def amcl_callback(self, msg):
+        """AMCL pose를 받아 Nav2 경로 생성과 차량 방향 계산에 쓸 현재 위치로 저장합니다."""
         self.current_pose = PoseStamped()
         self.current_pose.header = msg.header
         self.current_pose.pose = msg.pose.pose
@@ -383,6 +404,7 @@ class Amrmove(Node):
             cv2.waitKey(1)
 
     def xyz_callback(self, msg):
+        """웹캠 객체 좌표 JSON을 미션 target으로 변환하고 새 target이면 미션을 시작합니다."""
         new_targets = self.json_to_dic(msg)
         if not new_targets or len(new_targets) == 0:
             return
@@ -406,6 +428,7 @@ class Amrmove(Node):
         self.start_pending_mission()
 
     def start_pending_mission(self):
+        """대기 중인 target 목록을 현재 미션으로 승격하고 미션 경로를 다시 생성합니다."""
         if not self.pending_targets:
             return
         
@@ -418,6 +441,7 @@ class Amrmove(Node):
 
     # 디버깅용
     def publish_targets(self):
+        """현재 미션 target들을 RViz에서 빨간 구로 확인할 수 있도록 MarkerArray를 발행합니다."""
         marker_array = MarkerArray()
 
         for i, target in enumerate(self.targets):
@@ -455,6 +479,7 @@ class Amrmove(Node):
     # 데이터 처리
     #-----------
     def is_duplicate(self, target_x, target_y):
+        """이미 등록된 target과 가까우면 같은 차량으로 보고 중복 추가를 막습니다."""
         for kx, ky in self.known_locations:
             dist = math.hypot(kx - target_x, ky - target_y)
             if dist <= self.DUPLICATE_THRESHOLD:
@@ -462,6 +487,7 @@ class Amrmove(Node):
         return False
     
     def json_to_dic(self, msg):
+        """웹캠 좌표 JSON을 Nav2 접근 좌표와 차량 원좌표가 포함된 dict list로 변환합니다."""
         try:
             data = json.loads(msg.data)
 
@@ -469,6 +495,7 @@ class Amrmove(Node):
 
             targets = []
 
+            # zone별 offset은 차량 실제 좌표(raw_x/raw_y)에서 로봇이 접근할 목표 좌표를 만들 때 사용합니다.
             OFFSET_X_1 = -0.14
             OFFSET_Y_1 = -0.465
 
@@ -523,6 +550,7 @@ class Amrmove(Node):
             return []
     
     def publish_target_to_amr2(self, target): 
+        """번호판 확보가 끝난 target의 현재 로봇 pose를 AMR2 전달 토픽(/a_to_b)으로 발행합니다."""
 
         data = {
             "event_id": target["event_id"],
@@ -566,6 +594,7 @@ class Amrmove(Node):
     # Utility
     #-----------   
     def make_pose(self, frame_id, x, y, yaw):
+        """x, y, yaw 값을 Nav2가 사용하는 PoseStamped 형식으로 변환합니다."""
         pose = PoseStamped()
         pose.header.frame_id = frame_id
         pose.pose.position.x = x
@@ -594,6 +623,7 @@ class Amrmove(Node):
         return math.atan2(dy, dx)
     
     def nearest_wp(self, pose):
+        """순찰 전체 waypoint 중 입력 pose와 가장 가까운 waypoint index를 찾습니다."""
         if not hasattr(self, "patrol_waypoints"):
             return 0
 
@@ -612,6 +642,7 @@ class Amrmove(Node):
         return nearest_index
     
     def nearest_patrol_path(self):
+        """현재 위치가 순찰 경로의 어느 구간에 가장 가까운지 path index로 반환합니다."""
         if self.current_pose is None:
             return 0
         wp = self.nearest_wp(self.current_pose)
@@ -626,6 +657,7 @@ class Amrmove(Node):
     # 경로 생성
     #-----------    
     def default_path(self, start):
+        """PATROL_TARGETS를 순환 방문하는 기본 순찰 경로와 waypoint 누적 길이를 생성합니다."""
         if self.current_pose is None:
             self.get_logger().warn("amcl not received")
             return 
@@ -681,6 +713,7 @@ class Amrmove(Node):
         self.path_index = 0
 
     def sort_xyzr(self):
+        """현재 순찰 진행 방향 기준으로 미션 target 방문 순서를 정렬합니다."""
         if self.current_pose is None or not hasattr(self, "path_length") or len(self.path_length) == 0:
             self.get_logger().warn("Patrol path not generated yet. Skiping sort.")
             return
@@ -707,6 +740,7 @@ class Amrmove(Node):
         self.targets.sort(key=lambda t: t["distance"])
 
     def path_remake(self):
+        """정렬된 target들을 순서대로 방문하는 미션 경로를 Nav2 getPath로 생성합니다."""
         if self.current_pose is None:
             self.get_logger().warn("amcl not received")
             return
@@ -742,6 +776,7 @@ class Amrmove(Node):
         self.mode = "MISSION"
 
     def return_to_patrol(self):
+        """미션 종료 후 가장 가까운 순찰 경로로 복귀하는 RETURN 경로를 구성합니다."""
         self.return_paths = []
         self.next_patrol_path = self.nearest_patrol_path()
 
@@ -804,6 +839,7 @@ class Amrmove(Node):
             self._stop_robot()
             return False
 
+        # scan_callback이 마지막으로 추정한 차량 옆면 직선 정보를 복사해 이번 target의 기준값으로 고정합니다.
         line = dict(self.latest_line)
         if line['line_length'] < self.min_line_length:
             self.get_logger().warning(
@@ -827,7 +863,8 @@ class Amrmove(Node):
         self._sleep_with_spin(self.settle_time)
         parallel_odom_yaw = self.current_yaw
 
-        # 4. 1차 탐색: 초록 선 길이의 1.5배만큼 전진한 뒤 차량 좌표를 바라봅니다.
+        # 4. 1차 탐색: 초록 선 길이 * first_move_multiplier만큼 전진한 뒤 차량 좌표를 바라봅니다.
+        # 너무 멀리 가지 않도록 max_search_distance로 이동 거리 상한을 둡니다.
         first_distance = min(
             line['line_length'] * self.first_move_multiplier,
             self.max_search_distance
@@ -868,7 +905,7 @@ class Amrmove(Node):
             return False
 
         # 5. 2차 탐색: target을 바라본 자세에서 다시 평행 자세로 돌아온 뒤,
-        # 현재 위치에서 추가로 2.0배 전진해 총 3.5배 위치를 확인합니다.
+        # 현재 위치에서 추가 전진해 총 line_length * retry_total_move_multiplier 위치를 확인합니다.
         rotate_back = self._normalize_angle(parallel_odom_yaw - self.current_yaw)
         self.get_logger().info(
             f"3단계: 평행 자세로 복귀 회전 {math.degrees(rotate_back):.1f} deg"
@@ -1008,6 +1045,7 @@ class Amrmove(Node):
             self.get_logger().warning("odom yaw가 없어 회전할 수 없습니다.")
             return False
 
+        # odom yaw 시작값을 기준으로 실제 회전량을 누적해 목표 각도에 도달했는지 판단합니다.
         start_yaw = self.current_yaw
         direction = 1.0 if target_angle > 0.0 else -1.0
         timeout = max(8.0, abs(target_angle) / max(self.angular_speed, 1e-3) + 8.0)
@@ -1044,6 +1082,7 @@ class Amrmove(Node):
             self.get_logger().warning("odom 데이터가 없어 직선 이동할 수 없습니다.")
             return False
 
+        # 시작 odom 위치에서의 유클리드 이동 거리로 전진량을 판단합니다.
         self.last_move_stopped_by_obstacle = False
         start_pose = self.current_odom.pose.pose.position
         start_x = start_pose.x
@@ -1057,6 +1096,7 @@ class Amrmove(Node):
         while rclpy.ok():
             rclpy.spin_once(self, timeout_sec=0.05)
 
+            # 현재 로직은 전진 중에만 전방 안전 정지를 적용합니다.
             if direction > 0.0 and self._front_obstacle_too_close():
                 self.get_logger().warning("전방 장애물이 가까워 현재 위치에서 이동을 중단합니다.")
                 self.last_move_stopped_by_obstacle = True
@@ -1411,12 +1451,14 @@ class Amrmove(Node):
     # Navigation
     #----------- 
     def cancel_task(self):
+        """Nav2가 수행 중인 작업이 있으면 취소하고 내부 current_task 상태를 초기화합니다."""
         if self.current_task:
             self.navigator.cancelTask()
             
             self.current_task = False 
 
     def follow_path(self):
+        """현재 mode에 맞는 path를 Nav2에 전달하고, 완료 결과에 따라 다음 상태로 전환합니다."""
         if self.wait_until is not None:
             if time.time() < self.wait_until:
                 return
@@ -1440,6 +1482,7 @@ class Amrmove(Node):
 
                 if self.mode == "PATROL":
 
+                    # 순찰은 매번 현재 pose에서 다음 순찰 지점까지의 path를 새로 계산해 따라갑니다.
                     goal = self.make_pose(
                         "map",
                         PATROL_TARGETS[self.path_index][0],
@@ -1456,6 +1499,7 @@ class Amrmove(Node):
                     self.navigator.followPath(path)
 
                 else:
+                    # MISSION/RETURN은 미리 만들어 둔 path list를 순서대로 따라갑니다.
                     self.navigator.followPath(paths[self.path_index])
 
                 self.current_task = True
@@ -1489,6 +1533,7 @@ class Amrmove(Node):
                             "전송 없이 다음 좌표로 이동합니다."
                         )
 
+                    # 성공/실패와 상관없이 같은 target에 오래 머물지 않도록 짧게 안정화 후 다음 path로 넘어갑니다.
                     self.wait_until = time.time() + 3.0
                 self.path_index += 1
 
@@ -1499,10 +1544,12 @@ class Amrmove(Node):
                 elif self.mode == "MISSION":
                     if self.path_index >= len(self.mission_paths):
                         if len(self.pending_targets) > 0:
+                            # 미션 수행 중 새 좌표가 들어온 경우, 기존 미션이 끝난 뒤 새 미션으로 전환합니다.
                             self.get_logger().info("mission complete")
                             self.start_pending_mission()
 
                         else:
+                            # 더 이상 방문할 target이 없으면 순찰 경로로 복귀합니다.
                             self.get_logger().info("all clear go to patrol")
                             self.return_to_patrol()
                 
