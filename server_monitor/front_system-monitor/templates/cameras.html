@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}카메라 - 주차 단속 시스템{% endblock %}
+{% block page_title %}실시간 카메라{% endblock %}
+
+{% block content %}
+<div class="grid-2">
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">🤖 AMR1 카메라</span>
+      <span class="live-dot" style="font-size:0.72rem;">실시간</span>
+    </div>
+    <div class="panel-body">
+      <div class="webcam-wrap" style="min-height:380px;">
+        <div class="webcam-overlay" id="overlay-amr1">
+          <div class="spinner"></div>
+          <span>화면 대기중...</span>
+        </div>
+        <img src="{{ url_for('video_feed_amr1') }}" alt="AMR1 카메라" onload="document.getElementById('overlay-amr1').style.display='none'">
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">🤖 AMR2 카메라</span>
+      <span class="live-dot" style="font-size:0.72rem;">실시간</span>
+    </div>
+    <div class="panel-body">
+      <div class="webcam-wrap" style="min-height:380px;">
+        <div class="webcam-overlay" id="overlay-amr2">
+          <div class="spinner"></div>
+          <span>화면 대기중...</span>
+        </div>
+        <img src="{{ url_for('video_feed_amr2') }}" alt="AMR2 카메라" onload="document.getElementById('overlay-amr2').style.display='none'">
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

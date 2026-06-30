@@ -1,0 +1,253 @@
+"""
+[프로그램] bridge_webcam.py — 웹캠 ROS2 → 중앙 서버 브리지 노드
+================================================================
+역할:
+  웹캠 팀의 ROS2 토픽을 구독하여 중앙 Django 서버의 HTTP API로 전달한다.
+  ROS2와 Django 서버는 서로 다른 통신 방식을 사용하기 때문에,
+  이 브리지 노드가 두 시스템 사이의 변환기 역할을 한다.
+
+구독 토픽 → 전송 API:
+  webcam_images/webcam1/detections   (sensor_msgs/Image)
+    → POST /api/webcam1/frame/        (바운딩박스 포함 이미지, base64)
+
+  webcam_objects/map_detections      (std_msgs/String, JSON)
+    → POST /api/parking/              (차량 맵 좌표 x, y)
+
+실행 방법:
+  source /opt/ros/humble/setup.bash
+  python3 bridge_webcam.py
+
+주의:
+  - ROS2 시스템 Python으로 실행해야 한다 (venv 사용 불가).
+  - requests 라이브러리는 시스템 pip으로 설치 필요:
+      pip3 install requests
+"""
+
+import base64
+import json
+import threading
+
+import cv2
+import requests
+import rclpy
+from cv_bridge import CvBridge
+from std_msgs.msg import String
+from rclpy.node import Node
+from sensor_msgs.msg import Image
+
+# 중앙 서버 주소
+SERVER = 'http://192.168.107.42:8000'
+
+# JPEG 압축 품질 (0~100). 낮을수록 파일 크기 작아지고 화질 저하.
+# 60으로 설정하여 네트워크 부하와 화질의 균형을 맞춤.
+JPEG_QUALITY = 60
+
+
+def _post(url, payload):
+    """
+    [함수] HTTP POST 요청을 서버로 전송한다.
+
+    Args:
+        url     : 요청을 보낼 서버 엔드포인트 URL
+        payload : JSON으로 전송할 딕셔너리 데이터
+
+    Note:
+        - timeout=1로 설정하여 서버 응답이 없어도 ROS2 루프가 블로킹되지 않도록 함.
+        - 예외는 조용히 무시한다 (네트워크 오류 시 로그 스팸 방지).
+        - 이 함수는 항상 threading.Thread로 비동기 호출한다.
+    """
+    try:
+        requests.post(url, json=payload, timeout=1)
+    except Exception:
+        pass
+
+
+def _encode(cv_img):
+    """
+    [함수] OpenCV 이미지를 base64 문자열로 인코딩한다.
+
+    Args:
+        cv_img : OpenCV BGR 이미지 (numpy ndarray)
+
+    Returns:
+        str : JPEG 압축 후 base64 인코딩된 문자열
+
+    Note:
+        - JSON으로 이미지를 전송하기 위해 base64 인코딩이 필요하다.
+        - JPEG_QUALITY(60)로 압축하여 전송 데이터 크기를 줄인다.
+    """
+    _, buf = cv2.imencode('.jpg', cv_img, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+    return base64.b64encode(buf).decode('utf-8')
+
+
+class WebcamBridge(Node):
+    """
+    [클래스] 웹캠 브리지 ROS2 노드.
+
+    ROS2 토픽 2개를 구독하여 중앙 서버 HTTP API로 데이터를 전달한다.
+
+    Attributes:
+        bridge        : CvBridge — ROS2 Image 메시지를 OpenCV 이미지로 변환하는 도구
+        _prev_coords  : dict — 이전 프레임에서 탐지된 차량 좌표와 parking_events.id(DB PK) 매핑.
+                        key: (round(x,1), round(y,1)), value: parking_events.id (DB PK)
+                        ※ value는 vehicle_id(웹캠 부여 번호)가 아니라 POST /api/parking/
+                          응답으로 받은 DB PK다. DELETE 호출 시 이 값을 사용한다.
+                        diff 비교로 새 차량 POST / 없어진 차량 DELETE 처리에 사용.
+    """
+
+    def __init__(self):
+        """
+        [메서드] 노드 초기화.
+
+        - CvBridge 생성
+        - diff용 이전 좌표 dict 초기화
+        - ROS2 토픽 2개 구독 등록
+        """
+        super().__init__('webcam_bridge')
+        self.bridge = CvBridge()
+
+        # 이전 프레임 좌표 → parking_events.id(DB PK) 매핑 (diff 비교용)
+        # 예: {(1.0, 2.0): 3} → 좌표 (1.0, 2.0)의 차량이 parking_events.id=3
+        # ※ vehicle_id(웹캠 confidence 순 번호)가 아니라 POST /api/parking/ 응답으로
+        #   받은 DB PK를 저장한다. DELETE /api/parking/<id>/delete/ 호출에 사용.
+        self._prev_coords = {}
+
+        # 웹캠1: 바운딩박스가 그려진 탐지 결과 이미지 → 시스템 모니터 표시용
+        self.create_subscription(
+            Image,
+            'webcam_images/webcam1/detections',
+            self._webcam1_cb,
+            10,
+        )
+        # 차량 맵 좌표: JSON 문자열 형태로 발행됨 (std_msgs/String)
+        # 예: '{"objects": [{"x": 0.5, "y": -1.2}, ...]}'
+        self.create_subscription(
+            String,
+            'webcam_objects/map_detections',
+            self._map_detections_cb,
+            10,
+        )
+
+        self.get_logger().info('웹캠 브리지 노드 시작')
+
+    def _webcam1_cb(self, msg):
+        """
+        [콜백] 웹캠1 이미지 수신 시 호출된다.
+
+        ROS2 Image 메시지를 OpenCV 이미지로 변환하고 base64로 인코딩하여
+        서버의 /api/webcam1/frame/ 엔드포인트로 전송한다.
+        시스템 모니터 대시보드의 실시간 웹캠1 화면에 표시된다.
+
+        Args:
+            msg : sensor_msgs/Image — 웹캠1의 탐지 결과 이미지 메시지
+        """
+        frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        frame_b64 = _encode(frame)
+        # 비동기 전송 (메인 ROS2 루프 블로킹 방지)
+        threading.Thread(
+            target=_post,
+            args=(f'{SERVER}/api/webcam1/frame/', {'frame': frame_b64}),
+            daemon=True,
+        ).start()
+
+    def _post_parking(self, x, y, vehicle_id):
+        """
+        [메서드] POST /api/parking/ 동기 호출. 서버로부터 event_id를 받아야 하므로 동기 처리.
+
+        Returns:
+            int : 생성된 parking_events.id (DB PK). 실패 시 None.
+        """
+        try:
+            payload = {'observation_x': x, 'observation_y': y}
+            if vehicle_id is not None:
+                payload['event_id'] = vehicle_id
+            resp = requests.post(f'{SERVER}/api/parking/', json=payload, timeout=2)
+            if resp.status_code == 201:
+                return resp.json().get('event_id')
+        except Exception:
+            pass
+        return None
+
+    def _delete_parking(self, event_id):
+        """[메서드] DELETE /api/parking/<id>/delete/ 비동기 호출."""
+        def _do():
+            try:
+                requests.delete(f'{SERVER}/api/parking/{event_id}/delete/', timeout=2)
+            except Exception:
+                pass
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _map_detections_cb(self, msg):
+        """
+        [콜백] 차량 맵 좌표 JSON 수신 시 호출된다.
+
+        이전 프레임과 현재 프레임을 diff 비교하여:
+          - 새로 생긴 차량 → POST → event_id 저장
+          - 없어진 차량    → DELETE
+          - 그대로인 차량  → 아무것도 안 함
+
+        기대하는 JSON 형식:
+          {"objects": [{"x": 0.5, "y": -1.2, "vehicle_id": 1}, ...]}
+
+        Args:
+            msg : std_msgs/String — JSON 문자열이 담긴 메시지
+        """
+        try:
+            data = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f'JSON 파싱 실패: {msg.data[:80]}')
+            return
+
+        # 현재 프레임 좌표 추출
+        current_coords = {}
+        for obj in data.get('objects', []):
+            x = obj.get('x', 0.0)
+            y = obj.get('y', 0.0)
+            # 웹캠 팀이 ROS2 메시지 필드를 'event_id'로 명명했으나,
+            # 실제 값은 웹캠이 confidence 순으로 부여한 parking_events.vehicle_id다.
+            # parking_events.id(DB PK)와 다른 값이므로 혼동 주의.
+            vehicle_id = obj.get('event_id')
+
+            if x == 0.0 or y == 0.0:
+                self.get_logger().warn(f'무효 좌표 스킵: ({x:.2f}, {y:.2f})')
+                continue
+
+            key = (round(x, 1), round(y, 1))
+            current_coords[key] = (x, y, vehicle_id)
+
+        # 새로 생긴 차량 → POST
+        for key, (x, y, vehicle_id) in current_coords.items():
+            if key not in self._prev_coords:
+                event_id = self._post_parking(x, y, vehicle_id)
+                if event_id is not None:
+                    self._prev_coords[key] = event_id
+                    self.get_logger().info(f'새 차량 등록: ({x:.2f}, {y:.2f}) event_id={event_id}')
+
+        # 없어진 차량 → DELETE
+        for key in list(self._prev_coords.keys()):
+            if key not in current_coords:
+                event_id = self._prev_coords.pop(key)
+                self._delete_parking(event_id)
+                self.get_logger().info(f'차량 제거: event_id={event_id}')
+
+
+def main():
+    """
+    [함수] 노드 진입점.
+
+    rclpy를 초기화하고 WebcamBridge 노드를 생성하여 spin 루프를 실행한다.
+    Ctrl+C 입력 시 노드를 안전하게 종료한다.
+    """
+    rclpy.init()
+    node = WebcamBridge()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

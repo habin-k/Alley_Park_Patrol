@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}대시보드 - 주차 단속 시스템{% endblock %}
+{% block page_title %}대시보드 홈{% endblock %}
+
+{% block content %}
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="s-label">전체 이벤트</div>
+    <div class="s-value c-blue">{{ total_events }}</div>
+    <div class="s-sub">누적 탐지 건수</div>
+  </div>
+  <div class="stat-card">
+    <div class="s-label">불법 주차</div>
+    <div class="s-value c-red">{{ illegal_total }}</div>
+    <div class="s-sub">단속 대상 차량</div>
+  </div>
+  <div class="stat-card">
+    <div class="s-label">단속 완료</div>
+    <div class="s-value c-green">{{ enforced }}</div>
+    <div class="s-sub">WARNING_ISSUED</div>
+  </div>
+  <div class="stat-card">
+    <div class="s-label">번호판 매칭</div>
+    <div class="s-value c-purple">{{ matched }}</div>
+    <div class="s-sub">SCANNED 이상</div>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">📷 웹캠 카메라</span>
+    </div>
+    <div class="panel-body" style="padding:12px;">
+      <div class="webcam-wrap">
+        <div style="text-align:center; color:var(--muted);">
+          <div style="font-size:32px; margin-bottom:8px;">📷</div>
+          <a href="{{ url_for('webcam') }}" style="color:var(--accent); text-decoration:none; font-size:0.85rem; font-weight:600;">자세히 보기 →</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">🤖 AMR 카메라</span>
+    </div>
+    <div class="panel-body" style="padding:12px;">
+      <div class="webcam-wrap">
+        <div style="text-align:center; color:var(--muted);">
+          <div style="font-size:32px; margin-bottom:8px;">🤖</div>
+          <a href="{{ url_for('cameras') }}" style="color:var(--accent); text-decoration:none; font-size:0.85rem; font-weight:600;">자세히 보기 →</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">📋 주차 단속 리스트</span>
+    </div>
+    <div class="panel-body">
+      <p style="color:var(--muted); font-size:0.9rem; margin-bottom:14px;">
+        불법주차 단속 이벤트와 처리 상태를 확인합니다.
+      </p>
+
+      <div class="preview-box {{ 'empty-state' if violations_total == 0 else '' }}">
+        {% if violations_total == 0 %}
+          <p style="color:var(--muted); font-size:0.85rem; text-align:center; margin:0;">단속된 차량이 없습니다.</p>
+        {% else %}
+          <ul style="list-style:none;">
+            {% for row in violations_data[:4] %}
+            <li style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border); font-size:0.85rem;">
+              <span>#{{ row.event_id }}{% if row.zone_type %} · {{ row.zone_type }}{% endif %}</span>
+              <span class="badge {{ row.status }}">{{ row.status }}</span>
+            </li>
+            {% endfor %}
+          </ul>
+          {% if violations_total > 4 %}
+            <p style="color:var(--muted); font-size:0.8rem; margin-top:8px;">… 외 {{ violations_total - 4 }}건</p>
+          {% endif %}
+        {% endif %}
+      </div>
+
+      <a href="{{ url_for('violations') }}" style="display:inline-block; padding:9px 18px; background:var(--accent); color:#fff; border-radius:8px; text-decoration:none; font-size:0.85rem; font-weight:600;">
+        리스트 보기
+      </a>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">♿ 장애인 차량 관리</span>
+    </div>
+    <div class="panel-body">
+      <p style="color:var(--muted); font-size:0.9rem; margin-bottom:14px;">
+        장애인 전용 주차 구역 등록 차량을 관리합니다.
+      </p>
+
+      <div class="preview-box {{ 'empty-state' if disabled_total == 0 else '' }}">
+        {% if disabled_total == 0 %}
+          <p style="color:var(--muted); font-size:0.85rem; text-align:center; margin:0;">등록된 장애인 차량이 없습니다.</p>
+        {% else %}
+          <ul style="list-style:none;">
+            {% for row in disabled_data[:4] %}
+            <li style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border); font-size:0.85rem;">
+              <strong>{{ row.plate_number }}</strong>
+              <span style="color:var(--muted); font-size:0.78rem;">{{ row.registered_at }}</span>
+            </li>
+            {% endfor %}
+          </ul>
+          {% if disabled_total > 4 %}
+            <p style="color:var(--muted); font-size:0.8rem; margin-top:8px;">… 외 {{ disabled_total - 4 }}건</p>
+          {% endif %}
+        {% endif %}
+      </div>
+
+      <a href="{{ url_for('disabled') }}" style="display:inline-block; padding:9px 18px; background:var(--accent); color:#fff; border-radius:8px; text-decoration:none; font-size:0.85rem; font-weight:600;">
+        관리 페이지로 이동
+      </a>
+    </div>
+  </div>
+</div>
+{% endblock %}

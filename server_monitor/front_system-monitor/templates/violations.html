@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}단속 리스트 - 주차 단속 시스템{% endblock %}
+{% block page_title %}주차 단속 리스트{% endblock %}
+
+{% block content %}
+<div class="panel">
+  <div class="panel-header">
+    <span class="panel-title">📋 단속 이벤트 로그</span>
+    <div class="filter-tabs">
+      <a href="{{ url_for('violations') }}" class="filter-tab {{ 'active' if not current_status else '' }}">전체</a>
+      <a href="{{ url_for('violations', status='DETECTED') }}" class="filter-tab {{ 'active' if current_status == 'DETECTED' else '' }}">DETECTED</a>
+      <a href="{{ url_for('violations', status='SCANNED') }}" class="filter-tab {{ 'active' if current_status == 'SCANNED' else '' }}">SCANNED</a>
+      <a href="{{ url_for('violations', status='WARNING_ISSUED') }}" class="filter-tab {{ 'active' if current_status == 'WARNING_ISSUED' else '' }}">단속완료</a>
+    </div>
+  </div>
+  <div class="tbl-wrap">
+    <table style="table-layout: fixed;">
+      <thead>
+        <tr>
+          <th style="width:10%;">ID</th>
+          <th style="width:16%;">차량번호</th>
+          <th style="width:25%;">OCR 번호판 이미지</th>
+          <th style="width:20%;">상태</th>
+          <th style="width:20%;">탐지시각</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in data %}
+        <tr>
+          <td style="color:var(--muted)">#{{ row.event_id }}</td>
+          <td>
+            {% if row.vehicle_info and row.vehicle_info.plate_number %}{{ row.vehicle_info.plate_number }}{% else %}<span class="na">-</span>{% endif %}
+          </td>
+          <td>
+            {% if row.status == 'WARNING_ISSUED' and row.vehicle_info and row.vehicle_info.ocr_image %}
+              <div class="ocr-thumb" onclick="document.getElementById('lightbox-img').src=this.querySelector('img').src; document.getElementById('lightbox').style.display='flex';">
+                <img src="data:image/jpeg;base64,{{ row.vehicle_info.ocr_image }}" alt="OCR 번호판">
+              </div>
+            {% else %}
+              <span class="na">-</span>
+            {% endif %}
+          </td>
+          <td><span class="badge {{ row.status }}">{{ row.status }}</span></td>
+          <td style="color:var(--muted); font-size:0.78rem;">{{ row.created_at }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="5" class="empty">단속 이벤트 기록이 없습니다.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if total_pages > 1 %}
+  <div style="display:flex; align-items:center; justify-content:center; gap:6px; padding:16px 20px; flex-wrap:wrap;">
+    {% if page > 1 %}
+      <a href="{{ url_for('violations', status=current_status, page=page-1) }}" class="filter-tab">이전</a>
+    {% endif %}
+
+    {% for p in range(1, total_pages + 1) %}
+      {% if p == page %}
+        <span class="filter-tab active">{{ p }}</span>
+      {% elif p <= 2 or p > total_pages - 2 or (p >= page - 1 and p <= page + 1) %}
+        <a href="{{ url_for('violations', status=current_status, page=p) }}" class="filter-tab">{{ p }}</a>
+      {% elif p == 3 or p == total_pages - 2 %}
+        <span style="color:var(--muted); padding:0 4px;">…</span>
+      {% endif %}
+    {% endfor %}
+
+    {% if page < total_pages %}
+      <a href="{{ url_for('violations', status=current_status, page=page+1) }}" class="filter-tab">다음</a>
+    {% endif %}
+  </div>
+  <div style="text-align:center; padding-bottom:16px; color:var(--muted); font-size:0.78rem;">
+    전체 {{ total_count }}건 중 {{ (page-1)*20 + 1 }}–{{ [page*20, total_count]|min }}건 표시
+  </div>
+  {% endif %}
+</div>
+
+<!-- OCR 이미지 확대 보기 -->
+<div id="lightbox" onclick="this.style.display='none'"
+     style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:999; align-items:center; justify-content:center; cursor:zoom-out;">
+  <img id="lightbox-img" src="" alt="OCR 번호판 확대" style="max-width:90%; max-height:90%; border-radius:8px;">
+</div>
+{% endblock %}
