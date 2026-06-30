@@ -34,7 +34,6 @@ IMAGE_TO_OCR = 'target_plate_image'
 ID_TO_OCR = 'plate_id'
 OCR_RESULT = '/match_result'
 DISABLED_RESULT_AMR = '/disabled_result_amr'
-FIRECAR_RESULT_AMR = '/firecar_result_amr'
 WEBCAM_DATA_TOPIC = '/webcam_objects/map_detections'
 # OCR Node에는 차량 이미지와 id를 함께 보내야 한다.
 
@@ -55,7 +54,11 @@ DOCK_POSE_X = -0.2
 DOCK_POSE_Y = 1.1
 DOCK_POSE_YAW = 1.57  # 라디안, 0이면 x축 방향, 1.57이면 y축 방향
 
-OCR_TIMEOUT_SEC = 10.0 # OCR 결과 기다리는 최대 시간
+OCR_TIMEOUT_SEC = 15.0 # OCR 결과 기다리는 최대 시간
+CAMERA_STABILIZE_SEC = 2.5 # 목표 도착 직후 카메라 프레임 안정화 대기 시간
+FIRECAR_CAR_CLASS_ID = 0
+FIRECAR_ALARM_REFRESH_SEC = 1.5
+FIRECAR_MISSING_TIMEOUT_SEC = 2.0
 
 ZONE4_GOAL_X = -2.8085745256604517
 ZONE4_GOAL_Y = 1.7146872497423458
@@ -73,7 +76,9 @@ class Amr2Mission(Node):
     IDLE = 'IDLE'
     UNDOCKING = 'UNDOCKING'
     GOING_TO_GOAL = 'GOING_TO_GOAL'
+    WAITING_CAMERA_STABLE = 'WAITING_CAMERA_STABLE'
     WAITING_OCR = 'WAITING_OCR'
+    WAITING_FIRECAR_CAR = 'WAITING_FIRECAR_CAR'
     GOING_TO_DOCK = 'GOING_TO_DOCK'
     DOCKING = 'DOCKING'
 
@@ -97,7 +102,10 @@ class Amr2Mission(Node):
         # 임무가 끝난 뒤 도킹 action 전에 돌아갈 위치
         self.dock_pose: Optional[PoseStamped] = self._dock_pose() 
         # OCR 결과를 기다리는 최대 timeout
+        self.camera_stable_deadline_ns: Optional[int] = None
         self.ocr_deadline_ns: Optional[int] = None
+        self.firecar_alarm_next_ns: Optional[int] = None
+        self.firecar_last_seen_ns: Optional[int] = None
         # 웹캠에서 받은 map 좌표 목록. 각 항목은 {"id", "zone", "x", "y", "time"}
         self.latest_webcam_targets = []
         self.latest_camera_image: Optional[Image] = None
@@ -107,6 +115,7 @@ class Amr2Mission(Node):
         self.declare_parameter('plate_model_path', PLATE_MODEL_PATH)
         self.declare_parameter('plate_confidence_threshold', 0.25)
         self.declare_parameter('plate_detection_timeout_sec', 3.0)
+        self.declare_parameter('camera_stabilize_sec', CAMERA_STABILIZE_SEC)
         self.declare_parameter('show_detection_window', True)
         self.declare_parameter('detection_window_name', 'AMR2 plate detection')
 
@@ -118,6 +127,8 @@ class Amr2Mission(Node):
             self.get_parameter('plate_confidence_threshold').value)
         self.plate_detection_timeout_sec = float(
             self.get_parameter('plate_detection_timeout_sec').value)
+        self.camera_stabilize_sec = float(
+            self.get_parameter('camera_stabilize_sec').value)
         self.show_detection_window = bool(
             self.get_parameter('show_detection_window').value)
         self.detection_window_name = str(
@@ -143,11 +154,6 @@ class Amr2Mission(Node):
             Bool,
             DISABLED_RESULT_AMR,
             lambda msg: self._ocr_callback(msg, {3}, 'disabled_result_amr'),
-            10)
-        self.create_subscription(
-            Bool,
-            FIRECAR_RESULT_AMR,
-            lambda msg: self._ocr_callback(msg, {4}, 'firecar_result_amr'),
             10)
         # 웹캠 JSON map 좌표 수신.
         self.create_subscription(
@@ -191,7 +197,7 @@ class Amr2Mission(Node):
         self._enqueue_mission(mission, 'AMR1')
 
     def _amr1_json_to_mission(self, msg: String):
-        """AMR1 JSON 문자열에서 event_id, x, y를 꺼내 큐 항목으로 변환한다."""
+        """AMR1 JSON 문자열에서 event_id, 위치, 방향을 꺼내 큐 항목으로 변환한다."""
         try:
             data = json.loads(msg.data)
             goal_id = str(data['event_id'])
@@ -201,13 +207,23 @@ class Amr2Mission(Node):
             else:
                 point = data
 
-            return {
+            orientation = point.get('orientation', data.get('orientation'))
+
+            mission = {
                 'id': goal_id,
                 'zone': data.get('zone'),
                 'x': float(point['x']),
                 'y': float(point['y']),
                 'yaw': 0.0,
             }
+            if orientation is not None:
+                mission['orientation'] = {
+                    'x': float(orientation['x']),
+                    'y': float(orientation['y']),
+                    'z': float(orientation['z']),
+                    'w': float(orientation['w']),
+                }
+            return mission
 
         except Exception as e:
             self.get_logger().error(f'AMR1 goal json: {e}')
@@ -295,8 +311,15 @@ class Amr2Mission(Node):
         pose.header.frame_id = 'map'
         pose.pose.position.x = mission['x']
         pose.pose.position.y = mission['y']
-        pose.pose.orientation.z = math.sin(mission['yaw'] / 2.0)
-        pose.pose.orientation.w = math.cos(mission['yaw'] / 2.0)
+        if 'orientation' in mission:
+            orientation = mission['orientation']
+            pose.pose.orientation.x = orientation['x']
+            pose.pose.orientation.y = orientation['y']
+            pose.pose.orientation.z = orientation['z']
+            pose.pose.orientation.w = orientation['w']
+        else:
+            pose.pose.orientation.z = math.sin(mission['yaw'] / 2.0)
+            pose.pose.orientation.w = math.cos(mission['yaw'] / 2.0)
         return self._copy_goal(pose)
 
     def json_to_dic(self, msg: String):
@@ -349,6 +372,14 @@ class Amr2Mission(Node):
         # OCR 대기 중일 때는 timeout만 확인하고 다른 행동은 하지 않는다.
         if self.state == self.WAITING_OCR:
             self._check_ocr_timeout()
+            return
+
+        if self.state == self.WAITING_CAMERA_STABLE:
+            self._check_camera_stable()
+            return
+
+        if self.state == self.WAITING_FIRECAR_CAR:
+            self._check_firecar_car_detection()
             return
 
         # IDLE이 아니면 이미 action이 진행 중이다.
@@ -477,15 +508,59 @@ class Amr2Mission(Node):
 
         # 같은 Nav2 이동이라도 현재 state에 따라 다음 일이 달라진다.
         if self.state == self.GOING_TO_GOAL:
-            # 목적지에 도착했으면 OCR을 기다린다.
-            self._start_ocr_wait()
+            # 목적지에 도착했으면 카메라 프레임이 안정될 시간을 둔 뒤 검사한다.
+            self._start_camera_stabilize()
         elif self.state == self.GOING_TO_DOCK:
             # 도킹 위치에 도착했으면 실제 dock action을 실행한다.
             self.get_logger().info('도킹 위치 도착')
             self._start_dock()
 
+    def _start_camera_stabilize(self):
+        """목표 도착 직후 흔들린 카메라 프레임을 피하기 위해 잠깐 대기한다."""
+        self.state = self.WAITING_CAMERA_STABLE
+        self.camera_stable_deadline_ns = (
+            self.get_clock().now().nanoseconds
+            + int(self.camera_stabilize_sec * 1_000_000_000)
+        )
+        self.get_logger().info(
+            f'목표 도착. 카메라 안정화 {self.camera_stabilize_sec:.1f}초 대기')
+
+    def _check_camera_stable(self):
+        """카메라 안정화 시간이 지나면 OCR/zone4 검사를 시작한다."""
+        if self.camera_stable_deadline_ns is None:
+            return
+        if self.get_clock().now().nanoseconds < self.camera_stable_deadline_ns:
+            return
+
+        self.camera_stable_deadline_ns = None
+        self._start_ocr_wait()
+
     def _start_ocr_wait(self):
         """목표 지점 도착 후 OCR 노드에 검사를 요청한다."""
+        current_zone = self.current_mission.get('zone')
+        if current_zone == 4:
+            self._start_firecar_car_monitor()
+            return
+
+        img_msg = self._make_target_plate_image(self.current_mission)
+        if img_msg is None:
+            self.get_logger().warning('차량 이미지 생성 실패. OCR 요청 전송 생략')
+        else:
+            img_msg.header.stamp = self.get_clock().now().to_msg()
+            self.image_to_ocr.publish(img_msg)
+
+            target_msg = String()
+            target_msg.data = json.dumps({
+                'event_id': self.goal_id,
+                'zone': str(current_zone),
+            })
+            self.id_to_ocr.publish(target_msg)
+
+        if img_msg is None:
+            self.get_logger().warning('OCR 요청 불가. 현재 목표를 종료합니다.')
+            self._finish_current_mission()
+            return
+
         self.state = self.WAITING_OCR
         # 현재 시간 + OCR_TIMEOUT_SEC를 저장한다.
         # timer callback에서 이 시간이 지났는지 계속 확인한다.
@@ -493,22 +568,24 @@ class Amr2Mission(Node):
             self.get_clock().now().nanoseconds
             + int(OCR_TIMEOUT_SEC * 1_000_000_000)
         )
-
-        img_msg = self._make_target_plate_image(self.current_mission)
-        if img_msg is None:
-            self.get_logger().warning(
-                '차량 이미지 생성 실패. OCR 흐름 테스트용 빈 CompressedImage를 발행합니다.')
-            img_msg = CompressedImage()
-        img_msg.header.stamp = self.get_clock().now().to_msg()
-        self.image_to_ocr.publish(img_msg)
-        
-        target_msg = String()
-        target_msg.data = json.dumps({
-            'event_id': self.goal_id,
-            'zone': str(self.current_mission.get('zone')),
-        })
-        self.id_to_ocr.publish(target_msg)
         self.get_logger().info('목표 도착. OCR 결과 대기')
+
+    def _start_firecar_car_monitor(self):
+        """소방차 구역 도착 후 Car bbox가 유지되는 동안 알람을 반복한다."""
+        bbox = self._detect_firecar_car_bbox()
+        if bbox is None:
+            self.get_logger().info('소방차 구역 도착. Car 미탐지로 다음 목표로 이동')
+            self._finish_current_mission()
+            return
+
+        self.state = self.WAITING_FIRECAR_CAR
+        self.firecar_last_seen_ns = self.get_clock().now().nanoseconds
+        self._play_alarm('소방차 구역 Car 탐지: 경보음 발생')
+        self.firecar_alarm_next_ns = (
+            self.firecar_last_seen_ns
+            + int(FIRECAR_ALARM_REFRESH_SEC * 1_000_000_000)
+        )
+        self.get_logger().info('소방차 구역 Car 탐지 유지 확인 시작')
 
     def _make_target_plate_image(self, mission) -> Optional[CompressedImage]:
         """YOLO 번호판 bbox 확인 후 OCR에 보낼 원본 이미지를 반환한다."""
@@ -524,16 +601,10 @@ class Amr2Mission(Node):
             self.get_logger().error('번호판 YOLO 모델이 로드되지 않았습니다.')
             return None
 
-        frame_msg = self._wait_for_camera_image()
-        if frame_msg is None:
-            self.get_logger().error('카메라 이미지를 시간 안에 받지 못했습니다.')
+        frame_data = self._latest_camera_frame()
+        if frame_data is None:
             return None
-
-        try:
-            frame = self.bridge.imgmsg_to_cv2(frame_msg, desired_encoding='bgr8')
-        except Exception as error:
-            self.get_logger().error(f'카메라 Image 변환 실패: {error}')
-            return None
+        frame_msg, frame = frame_data
 
         bbox = self._detect_plate_bbox(frame)
         if bbox is None:
@@ -543,7 +614,7 @@ class Amr2Mission(Node):
             return None
 
         x1, y1, x2, y2, conf = bbox
-        self._show_detection_frame(frame, bbox)
+        self._show_detection_frame(frame, bbox, 'Plate')
         self.get_logger().info(
             f'번호판 bbox 확인 후 원본 이미지 전송: id={event_id}, zone={zone}, '
             f'conf={conf:.3f}, xyxy=({x1}, {y1}, {x2}, {y2})')
@@ -562,7 +633,7 @@ class Amr2Mission(Node):
         msg.data = encoded.tobytes()
         return msg
 
-    def _show_detection_frame(self, frame, bbox):
+    def _show_detection_frame(self, frame, bbox, label='Object'):
         """번호판 탐지 결과를 OpenCV 창으로 표시한다."""
         if not self.show_detection_window:
             return
@@ -572,7 +643,7 @@ class Amr2Mission(Node):
         cv2.rectangle(display, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.putText(
             display,
-            f'Plate {conf:.2f}',
+            f'{label} {conf:.2f}',
             (x1, max(20, y1 - 8)),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
@@ -602,15 +673,49 @@ class Amr2Mission(Node):
         _ = self.plate_detection_timeout_sec
         return self.latest_camera_image
 
+    def _latest_camera_frame(self):
+        frame_msg = self._wait_for_camera_image()
+        if frame_msg is None:
+            self.get_logger().error('카메라 이미지를 시간 안에 받지 못했습니다.')
+            return None
+
+        try:
+            frame = self.bridge.imgmsg_to_cv2(frame_msg, desired_encoding='bgr8')
+        except Exception as error:
+            self.get_logger().error(f'카메라 Image 변환 실패: {error}')
+            return None
+
+        return frame_msg, frame
+
     def _detect_plate_bbox(self, frame):
         """YOLO 결과 중 confidence가 가장 높은 bbox 좌표를 반환한다."""
+        return self._detect_best_bbox(frame)
+
+    def _detect_firecar_car_bbox(self):
+        """최신 카메라 프레임에서 class 0 Car bbox를 탐지한다."""
+        if self.plate_model is None:
+            self.get_logger().error('YOLO 모델이 로드되지 않았습니다.')
+            return None
+
+        frame_data = self._latest_camera_frame()
+        if frame_data is None:
+            return None
+
+        _, frame = frame_data
+        bbox = self._detect_best_bbox(frame, FIRECAR_CAR_CLASS_ID)
+        if bbox is not None:
+            self._show_detection_frame(frame, bbox, 'Car')
+        return bbox
+
+    def _detect_best_bbox(self, frame, class_id=None):
+        """YOLO 결과 중 조건에 맞는 confidence가 가장 높은 bbox 좌표를 반환한다."""
         try:
             results = self.plate_model.predict(
                 source=frame,
                 conf=self.plate_confidence_threshold,
                 verbose=False)
         except Exception as error:
-            self.get_logger().error(f'번호판 YOLO 추론 실패: {error}')
+            self.get_logger().error(f'YOLO 추론 실패: {error}')
             return None
 
         if not results:
@@ -620,7 +725,17 @@ class Amr2Mission(Node):
         if boxes is None or len(boxes) == 0:
             return None
 
-        best_box = max(boxes, key=lambda box: float(box.conf[0]))
+        candidate_boxes = []
+        for box in boxes:
+            if class_id is not None:
+                if box.cls is None or int(box.cls[0].item()) != class_id:
+                    continue
+            candidate_boxes.append(box)
+
+        if not candidate_boxes:
+            return None
+
+        best_box = max(candidate_boxes, key=lambda box: float(box.conf[0]))
         conf = float(best_box.conf[0])
         if conf < self.plate_confidence_threshold:
             return None
@@ -672,12 +787,43 @@ class Amr2Mission(Node):
         self.get_logger().warning('OCR timeout. 현재 목표를 종료합니다.')
         self._finish_current_mission()
 
+    def _check_firecar_car_detection(self):
+        """소방차 구역 Car bbox 미탐지가 2초 이상 지속되면 다음 목표로 넘어간다."""
+        now_ns = self.get_clock().now().nanoseconds
+        bbox = self._detect_firecar_car_bbox()
+        if bbox is None:
+            if self.firecar_last_seen_ns is None:
+                self.firecar_last_seen_ns = now_ns
+                return
+
+            missing_ns = now_ns - self.firecar_last_seen_ns
+            if missing_ns >= int(FIRECAR_MISSING_TIMEOUT_SEC * 1_000_000_000):
+                self.get_logger().info(
+                    '소방차 구역 Car bbox 2초 이상 미탐지. '
+                    '알람 정지 후 다음 목표로 이동')
+                self._stop_alarm()
+                self._finish_current_mission()
+            return
+
+        self.firecar_last_seen_ns = now_ns
+        if self.firecar_alarm_next_ns is None or now_ns >= self.firecar_alarm_next_ns:
+            x1, y1, x2, y2, conf = bbox
+            self._play_alarm(
+                f'소방차 구역 Car 탐지 유지: conf={conf:.3f}, '
+                f'xyxy=({x1}, {y1}, {x2}, {y2})')
+            self.firecar_alarm_next_ns = (
+                now_ns + int(FIRECAR_ALARM_REFRESH_SEC * 1_000_000_000)
+            )
+
     def _finish_current_mission(self):
         """현재 목표를 끝내고 큐가 남았으면 다음 목표, 없으면 도킹으로 넘어간다."""
         self.goal_pose = None
         self.goal_id = None
         self.current_mission = None
+        self.camera_stable_deadline_ns = None
         self.ocr_deadline_ns = None
+        self.firecar_alarm_next_ns = None
+        self.firecar_last_seen_ns = None
 
         if self.mission_queue:
             self.state = self.IDLE
@@ -746,8 +892,8 @@ class Amr2Mission(Node):
             self.get_logger().error('도킹 실패')
         self.state = self.IDLE
 
-    def _play_alarm(self):
-        """OCR 결과가 True일 때 2초 동안 알람음을 낸다."""
+    def _play_alarm(self, log_text='OCR=True: 2초 알람음 발생'):
+        """2초 동안 알람음을 낸다."""
         msg = AudioNoteVector()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.append = False
@@ -760,7 +906,15 @@ class Amr2Mission(Node):
             msg.notes.append(note)
 
         self.audio_pub.publish(msg)
-        self.get_logger().warning('OCR=True: 2초 알람음 발생')
+        self.get_logger().warning(log_text)
+
+    def _stop_alarm(self):
+        """진행 중인 오디오 큐를 비우도록 빈 AudioNoteVector를 보낸다."""
+        msg = AudioNoteVector()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.append = False
+        self.audio_pub.publish(msg)
+        self.get_logger().info('알람음 정지 요청')
 
     def _copy_goal(self, source: PoseStamped) -> PoseStamped:
         """받은 goal을 Nav2에 보내기 좋은 형태로 복사한다."""

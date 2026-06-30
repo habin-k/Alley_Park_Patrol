@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>final_pjt</name>
+  <version>0.0.0</version>
+  <description>
+    TurtleBot4 navigation and AMR1 goal publishing nodes.
+  </description>
+  <maintainer email="donggeun3237@gmail.com">dg</maintainer>
+  <license>TODO: License declaration</license>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <depend>rclpy</depend>
+  <depend>ament_index_python</depend>
+  <depend>action_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>irobot_create_msgs</depend>
+  <depend>nav2_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <depend>math</depend>
+
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

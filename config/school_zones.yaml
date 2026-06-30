@@ -1,0 +1,12 @@
+# Axis-aligned school-zone rectangles in the map frame.
+# Add the real map coordinates before enabling the school_zone_yaml parameter.
+school_zones: []
+
+# Example:
+# school_zones:
+#   - name: school_zone_1
+#     min_x: -2.0
+#     max_x: 1.5
+#     min_y: 3.0
+#     max_y: 5.0
+#     speed_limit: 0.15

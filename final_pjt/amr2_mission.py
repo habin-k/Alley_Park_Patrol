@@ -27,7 +27,7 @@ from sensor_msgs.msg import Image
 AMR1_GOAL_TOPIC = '/a_to_b'
 IMAGE_TO_OCR = '/target_plate_image'
 ID_TO_OCR = '/plate_id'
-OCR_RESULT = '/ocr_result'
+OCR_RESULT = '/match_result'
 WEBCAM_DATA_TOPIC = '/webcam_objects/map_detections'
 # OCR Node에는 차량 이미지와 id를 함께 보내야 한다.
 
@@ -49,6 +49,14 @@ DOCK_POSE_YAW = 1.57  # 라디안, 0이면 x축 방향, 1.57이면 y축 방향
 
 OCR_TIMEOUT_SEC = 10.0 # OCR 결과 기다리는 최대 시간
 WEBCAM_TARGET_OFFSET_M = 0.5  # 차량 좌표에서 이 거리만큼 떨어진 위치로 이동한다.
+
+ZONE4_GOAL_X = -2.8085745256604517
+ZONE4_GOAL_Y = 1.7146872497423458
+ZONE4_GOAL_YAW = 2.0939786386670427
+
+ZONE3_GOAL_X = -2.8071492296659484
+ZONE3_GOAL_Y = 1.8936850720519807
+ZONE3_GOAL_YAW = -2.5405283556901237
 
 
 class Amr2Mission(Node):
@@ -179,6 +187,24 @@ class Amr2Mission(Node):
 
     def _webcam_target_to_mission(self, target):
         """차량 좌표를 차량에서 0.5m 떨어진 접근 좌표로 변환한다."""
+        if target['zone'] == 3:
+            return {
+                'id': str(target['id']),
+                'zone': target['zone'],
+                'x': ZONE3_GOAL_X,
+                'y': ZONE3_GOAL_Y,
+                'yaw': ZONE3_GOAL_YAW,
+            }
+
+        if target['zone'] == 4:
+            return {
+                'id': str(target['id']),
+                'zone': target['zone'],
+                'x': ZONE4_GOAL_X,
+                'y': ZONE4_GOAL_Y,
+                'yaw': ZONE4_GOAL_YAW,
+            }
+
         car_x = float(target['x'])
         car_y = float(target['y'])
 
