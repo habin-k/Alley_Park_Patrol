@@ -1,4 +1,5 @@
 # amr_move_peter.py
+# amr 번호판 탐지 test 를 위한 코드
 
 import rclpy
 from rclpy.node import Node
