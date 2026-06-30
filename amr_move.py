@@ -184,11 +184,11 @@ class Amrmove(Node):
 
             targets = []
 
-            OFFSET_X_1 = -0.14
-            OFFSET_Y_1 = -0.465
+            OFFSET_X_1 = 0.5
+            OFFSET_Y_1 = 0.33
 
-            OFFSET_X_2 = 0.32
-            OFFSET_Y_2 = 0.931
+            OFFSET_X_2 = 0.5
+            OFFSET_Y_2 = -0.33
 
             for obj in data["objects"]:
                 event_id = obj["event_id"]
@@ -224,7 +224,9 @@ class Amrmove(Node):
                     "zone": zone,
                     "x": final_x,
                     "y": final_y,
-                    "time": system_time
+                    "time": system_time,
+                    "raw_x": raw_x,
+                    "raw_y": raw_y
                 })
                 
             return targets
@@ -273,6 +275,16 @@ class Amrmove(Node):
 
         return pose
     
+    def make_pose_to_target(self, frame_id, start_x, start_y, goal_x, goal_y, yaw_x, yaw_y):
+        yaw = math.atan2(yaw_y - start_y, yaw_x - start_x)
+
+        return self.make_pose(
+            frame_id,
+            goal_x,
+            goal_y,
+            yaw
+        )
+    
     def nearest_wp(self, pose):
         if not hasattr(self, "patrol_waypoints"):
             return 0
@@ -320,12 +332,18 @@ class Amrmove(Node):
         wp_start = 0
 
         for i in range(len(targets)):
-            goal = self.make_pose(
+            goal_x = targets[(i+1)%len(targets)][0]
+            goal_y = targets[(i+1)%len(targets)][1]
+
+            goal = self.make_pose_to_target(
                 "map",
-                targets[(i+1) % len(targets)][0],
-                targets[(i+1) % len(targets)][1],
-                targets[(i+1) % len(targets)][2]
-            )
+                start.pose.position.x,
+                start.pose.position.y,
+                goal_x,
+                goal_y,
+                goal_x,
+                goal_y
+            )            
             path = self.navigator.getPath(start, goal)
 
             if path is not None:
@@ -397,7 +415,13 @@ class Amrmove(Node):
         start = self.current_pose
 
         for target in self.targets:
-            goal = self.make_pose("map", target["x"], target["y"], 0.0)
+            goal = self.make_pose_to_target("map", 
+                                            start.pose.position.x, 
+                                            start.pose.position.y, 
+                                            target["x"], 
+                                            target["y"],
+                                            target['raw_x'],
+                                            target['raw_y'])
             path = self.navigator.getPath(start, goal)
 
             if path is None:
@@ -485,11 +509,14 @@ class Amrmove(Node):
 
                 if self.mode == "PATROL":
 
-                    goal = self.make_pose(
+                    goal = self.make_pose_to_target(
                         "map",
+                        self.current_pose.pose.position.x,
+                        self.current_pose.pose.position.y,
                         PATROL_TARGETS[self.path_index][0],
                         PATROL_TARGETS[self.path_index][1],
-                        PATROL_TARGETS[self.path_index][2]
+                        PATROL_TARGETS[self.path_index][0],
+                        PATROL_TARGETS[self.path_index][1]
                     )
 
                     path = self.navigator.getPath(self.current_pose, goal)
@@ -519,9 +546,9 @@ class Amrmove(Node):
             if result == TaskResult.SUCCEEDED:
                 if self.mode == "MISSION":
                     self.finished_target = self.mission_targets[self.path_index]
-                    self.publish_target_to_amr2(self.finished_target)
                     self.get_logger().info(f"target reached: {self.finished_target['event_id']}")
-                    self.wait_until = time.time() + 3.0
+                    self.wait_until = time.time() + 1.0
+                    self.publish_target_to_amr2(self.finished_target)
                 self.path_index += 1
 
                 if self.mode == "PATROL":
